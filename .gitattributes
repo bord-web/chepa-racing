@@ -1,0 +1,4 @@
+# Unix line endings on every OS: the head unit builds from these files
+* text=auto eol=lf
+*.png binary
+*.pack binary
