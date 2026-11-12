@@ -1,0 +1,6 @@
+# BMW's SDK: the head unit puts its own here when it builds the app, never commit it
+oap-sdk
+# build output (contains the SDK on the car)
+dist/
+__pycache__/
+*.pyc
