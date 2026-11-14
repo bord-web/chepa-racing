@@ -16,6 +16,8 @@
  *           the deepest retard, how often timing was pulled and misfires. "Log: on / off" (also a
  *           setting): off catches and records nothing, the cylinder tiles on Vitals show live values
  *   Maps    (from the map tile) maps 1-4 for MHD: tap a map, tap again to switch
+ *   Dev logs  (a tab only with the setting "Dev logs tab") where this car keeps the fuel's ethanol: the
+ *           DME's replies to every candidate (ethanol.js probe), raw, to be photographed with the cluster
  * No bar buttons besides the pager and Settings: the kit then draws no bar under the page.
  */
 const mgu = require('./kit/mgu');
@@ -32,6 +34,8 @@ require('./kit/fonts').register(CAR_ART.name, CAR_ART);
 
 const W = 1600, H = 520;
 const PAGES = ['vitals', 'boost', 'log'];
+const TAB_NAMES = { vitals: 'Vitals', boost: 'Boost', log: 'Log', dev: 'Dev logs' };
+const PROBE_MS = 5000;                   // Dev logs: the DME asked again this often while the page is open
 const PEDAL_IF = 'de.bmw.powertrain.AcceleratorPedal';
 const PEDAL_MS = 1000;                   // a pedal value older than this counts as none
 const GO = '#2fd27a';
@@ -74,6 +78,8 @@ mgu.run({
             pulls.feed(t, Object.assign({ map: maps.map }, tune.now), { start: settings.get('pullStart') || 80, minS: settings.get('pullMin') || 2, log: logOn() });
         }, () => { tune.reset(); pulls.reset(); });
         let page = Math.max(0, PAGES.indexOf(settings.get('page')));
+        /** the pages in the header: Dev logs last, only with its setting on */
+        const pages = () => (settings.get('devTab') ? PAGES.concat('dev') : PAGES);
         let onMaps = false, pick = null;                 // the map page; a map tapped once (waits for the second tap)
 
         /** The pull log is on (setting; off: nothing is recorded to it). */
@@ -390,7 +396,7 @@ mgu.run({
         /* ---------------- Maps ---------------- */
         function tapMap(n) {
             return () => {
-                ctx.log.info('maps: tap on map ' + n + ' (page ' + (onMaps ? 'maps' : PAGES[page]) + ', armed ' + (pick ? pick.n : '-') + ')');
+                ctx.log.info('maps: tap on map ' + n + ' (page ' + (onMaps ? 'maps' : pages()[page]) + ', armed ' + (pick ? pick.n : '-') + ')');
                 if (maps.busy) return render();
                 if (pick && pick.n === n && Date.now() - pick.at < CONFIRM_MS) {
                     pick = null;
@@ -434,20 +440,54 @@ mgu.run({
             G.button(cv, t, 1376, bottom - 56, 200, 56, 'Back', () => { onMaps = false; pick = null; return render(); }, { key: 'mapsBack' });
         }
 
+        /* ---------------- Dev logs: where the car has the ethanol content ---------------- */
+        const probe = () => eth.probe().then(repaint).catch((e) => ctx.log.warn('probe: ' + e));
+        function devPage(cv, t, n, now) {
+            const bottom = G.pageBottom(cv) - 8, ls = eth.linkState(), st = ls.stats;
+            const ago = (ms) => (ms ? Math.round((now - ms) / 1000) + ' s ago' : 'never');
+            if (!eth.probing && now - eth.probedAt > PROBE_MS) probe();
+            cv.text('DEV LOGS · FLEX FUEL', 40, 80, 22, t.dim, { font: 'bold', spacing: 2.5 });
+            cv.text('Chepa Racing ' + ctx.spec.version + ' · ' + clock(now) + ' · photograph this page and the cluster together', 350, 80, 20, t.dim);
+            G.button(cv, t, 1376, 50, 200, 44, eth.probing ? 'Reading…' : 'Read again', () => { probe(); return render(); }, { key: 'devProbe' });
+            cv.text('Data: ' + (n.demo ? 'DEMO' : 'CAR') + '    Diagnostic link: ' + ls.state +
+                (st ? '    requests ' + st.sent + ', answers ' + st.replies + ', no answer ' + st.missed + ', busy ' + (ls.busy || 0) : ''), 40, 122, 22, t.text, { font: 'bold' });
+            cv.text('App shows ' + ethText(n.ethanol) + (eth.source ? ' (from ' + eth.source + ', ' + ago(eth.t) + ')' : ' (no value from the DME)') +
+                '    ·    DME asked ' + ago(eth.probedAt), 40, 154, 22, G.isNum(n.ethanol) ? GO : t.warn, { font: 'bold' });
+            // the replies: one row per request (ethanol.js PROBES), under them the last notes
+            const cols = [['Request', 40], ['What', 190], ['Reply bytes', 560], ['Value', 1090]];
+            const notes = eth.notes.slice(-3), top = 196, nTop = bottom - notes.length * 24;
+            cols.forEach(([h, x]) => cv.text(h.toUpperCase(), x, top - 8, 15, t.dim, { font: 'bold', spacing: 1.5 }));
+            cv.fillRect(32, top, 1544, 1, withAlpha('#ffffff', 0.2));
+            const rows = eth.probed || [], rh = Math.min(34, (nTop - top - 8) / Math.max(1, rows.length));
+            if (!rows.length) cv.text(eth.probing ? 'Asking the DME…' : 'Not asked yet', 40, top + 36, 22, t.dim);
+            rows.forEach((r, i) => {
+                const y = top + i * rh, base = y + rh * 0.72;
+                if (i % 2) cv.fillRect(32, y, 1544, rh, withAlpha('#ffffff', 0.03));
+                const bad = /^refused/.test(r.value), none = !r.reply;
+                cv.text(r.req, cols[0][1], base, 20, t.text, { font: 'bold' });
+                cv.text(r.what, cols[1][1], base, 20, t.text);
+                cv.text(r.reply || '-', cols[2][1], base, 18, t.dim);
+                cv.text(r.value, cols[3][1], base, 20, bad ? t.warn : none ? t.dim : GO, { font: 'bold' });
+            });
+            notes.forEach(([ms, s], i) => cv.text(clock(ms) + '  ' + s, 40, nTop + 18 + i * 24, 18, t.dim));
+        }
+
         function render() {
-            const t = ctx.theme(), n = tune.now, u = units(settings), now = Date.now();
+            const t = ctx.theme(), n = tune.now, u = units(settings), now = Date.now(), pg = pages();
+            if (page >= pg.length) page = 0;
             const cv = ctx.canvas(W, H).clear(t.bg);
             if (onMaps) mapsPage(cv, t, u, now);
-            else if (PAGES[page] === 'boost') boostPage(cv, t, n, u);
-            else if (PAGES[page] === 'log') logPage(cv, t, u, now);
+            else if (pg[page] === 'boost') boostPage(cv, t, n, u);
+            else if (pg[page] === 'log') logPage(cv, t, u, now);
+            else if (pg[page] === 'dev') devPage(cv, t, n, now);
             else vitals(cv, t, n, u, now);
             const badge = 'MAP ' + (maps.map || '-') + ' · ' + ethText(n.ethanol);
-            G.frame(cv, t, ['Vitals', 'Boost', 'Log'], onMaps ? -1 : page, [n.demo && { text: 'DEMO' },
+            G.frame(cv, t, pg.map((p) => TAB_NAMES[p]), onMaps ? -1 : page, [n.demo && { text: 'DEMO' },
                 pulls.recording && { text: 'PULL', color: 'crit' }, { text: badge, color: 'accent2' }]);
             return ui.image('MAIN_GFX', cv);
         }
 
-        ui.onClick('BTN_PAGE', () => { onMaps = false; page = (page + 1) % PAGES.length; return render(); });
+        ui.onClick('BTN_PAGE', () => { onMaps = false; page = (page + 1) % pages().length; return render(); });
         ctx.onTab((i) => { onMaps = false; page = i; return render(); });
         settings.onChange((k) => { if (k === 'page') page = Math.max(0, PAGES.indexOf(settings.get('page'))); });
         ctx.loop('MAIN', 10, render);
