@@ -31,8 +31,9 @@
  *
  * Smooth motion: dials, bars and the g-meter glide to new values (critically damped spring,
  * evaluated every frame) instead of jumping at the rate the car sends data. Digital numbers
- * show the real value. g.smooth = false turns it off; a number sets the response (default 16:
- * ~0.3 s to settle). Apps can use smooth(key, value) for their own drawings.
+ * show the real value (radial: g.readout instead, e.g. hold()). g.smooth = false turns it off; a
+ * number sets the response (default 16: ~0.3 s to settle). Apps can use smooth(key, value) for
+ * their own drawings.
  */
 const { mix, ramp, withAlpha } = require('./canvas');
 const { makeLayer, dropLayer } = require('./record');
@@ -209,8 +210,9 @@ function radialLive(cv, t, cx, cy, r, g, min, max, thick, v, sv, f) {
         const pa = (a0 + clamp((g.peak - min) / (max - min), 0, 1) * 270) * Math.PI / 180;
         cv.line(cx + Math.sin(pa) * (r - thick), cy - Math.cos(pa) * (r - thick), cx + Math.sin(pa) * (r + 10), cy - Math.cos(pa) * (r + 10), 3, t.accent2);
     }
-    const big = Math.round(r * 0.62);
-    cv.text(fmt(v, g.decimals), cx, cy + big * 0.32, big, isNum(v) ? t.text : t.dim, { align: 'center', font: 'num' });
+    // g.readout: the number shown when it isn't the arc's value (e.g. G.hold: the number changes slower than the arc)
+    const big = Math.round(r * 0.62), rv = g.readout !== undefined ? g.readout : v;
+    cv.text(fmt(rv, g.decimals), cx, cy + big * 0.32, big, isNum(rv) ? t.text : t.dim, { align: 'center', font: 'num' });
     if (isNum(g.peak) && g.showPeak !== false) cv.text('PEAK ' + fmt(g.peak, g.decimals), cx, cy + r * 0.82 + 32, 22, t.accent2, { align: 'center', font: 'label', spacing: 1 });
 }
 

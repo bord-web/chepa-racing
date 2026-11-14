@@ -6,7 +6,7 @@
  *           limits from the settings (blue / green / yellow / red); in yellow or red the whole
  *           block lights up. Centre (setting): the boost dial up to the engine's max boost, the
  *           target on its rim; or the tyres (tyres.js): a black M3 from above (car_art.js) with
- *           each tyre's pressure, target and temperature. Right: map (tap: the map page) and ethanol (E37), then a 3 x 2
+ *           each tyre's pressure, target and temperature. Right: map (tap: the map page) and ethanol (E37: from the DME, ethanol.js), then a 3 x 2
  *           grid of cylinders: knock retard and misfires of the last pull (held until the next
  *           pull starts; pulls.js), or live (setting, or the pull log off). Full screen: it all grows
  *           into the screen's whole height (vitalsRoom)
@@ -26,6 +26,7 @@ const { Tune, units, cylLevel, ethText, CYL } = require('./tune');
 const { MapControl, MAPS } = require('./maps');
 const { Pulls, KEEP } = require('./pulls');
 const { Tyres } = require('./tyres');
+const { Ethanol } = require('./ethanol');
 const CAR_ART = require('./car_art');
 require('./kit/fonts').register(CAR_ART.name, CAR_ART);
 
@@ -35,6 +36,7 @@ const PEDAL_IF = 'de.bmw.powertrain.AcceleratorPedal';
 const PEDAL_MS = 1000;                   // a pedal value older than this counts as none
 const GO = '#2fd27a';
 const CONFIRM_MS = 5000;
+const DIAL_HOLD = 200;                   // the boost dial's numbers: 5 a second (as the OEM cluster's), the car's samples come at 20 Hz
 const MAP_NAMES = { none: '', stock: 'Stock', valet: 'Valet', street: 'Street', s1: 'Stage 1', s2: 'Stage 2', s2p: 'Stage 2+',
     e30: 'E30', e40: 'E40', e50: 'E50', e85: 'E85', race: 'Race', track: 'Track' };
 // the four temperatures: settings keys, the bar's end (deg C, at least the red limit + 20)
@@ -62,9 +64,11 @@ mgu.run({
                 if (p !== null && p >= -2 && p <= 102) { pedal.v = G.clamp(p, 0, 100); pedal.t = Date.now(); }
             },
         }, ctx.log).then((s) => ctx.log.info('signal AcceleratorPedal ' + (s && s.error ? 'error: ' + s.error : 'subscribed'))).catch(() => {});
+        // the fuel's ethanol content from the DME (ethanol.js), on the car only
+        const eth = new Ethanol(ctx, () => !car.data().demo);
         car.onSample((d, t) => {
             const live = !d.demo && pedal.v !== null && Date.now() - pedal.t < PEDAL_MS;
-            tune.feed(live ? Object.assign({}, d, { pedal: pedal.v }) : d, t);
+            tune.feed(d.demo ? d : Object.assign({}, d, { ethanol: eth.value }, live ? { pedal: pedal.v } : null), t);
             if (d.demo) tyres.step(d, t);
             // the log off: no pulls are caught at all (the tiles show live values)
             pulls.feed(t, Object.assign({ map: maps.map }, tune.now), { start: settings.get('pullStart') || 80, minS: settings.get('pullMin') || 2, log: logOn() });
@@ -164,9 +168,10 @@ mgu.run({
         /** The boost dial up to the engine's max boost, the target as a marker on its rim (kept on the page: r <= cy - 70). */
         function boostDial(cv, t, n, u, R) {
             const cx = 800, cy = Math.round((R.y0 + R.y1) / 2) + 5, r = Math.min(Math.round(214 * R.k), cy - 70), sc = dial(u);
+            // the arc and the target marker follow every sample; the numbers change at most every DIAL_HOLD ms
             const b = u.P(n.boost), tg = u.P(n.target);
             G.radial(cv, t, cx, cy, r, Object.assign({
-                value: b, decimals: u.pD, label: 'Boost', unit: u.pU, peak: u.P(n.peak), limit: u.maxBoost * 0.9,
+                value: b, readout: G.hold('d.b', b, DIAL_HOLD), decimals: u.pD, label: 'Boost', unit: u.pU, peak: u.P(n.peak), limit: u.maxBoost * 0.9,
                 zones: [{ from: u.maxBoost * 0.9, to: sc.max, color: 'crit', tintOnly: true }],
             }, sc));
             dialScale(cv, t, u, cx, cy, r);
@@ -177,7 +182,7 @@ mgu.run({
                 const nx = Math.cos(a) * s, ny = Math.sin(a) * s;
                 cv.quad([[ox - nx, oy - ny], [ox + nx, oy + ny], [tx, ty], [tx, ty]], c);
             }
-            cv.text('TARGET ' + G.fmt(tg, u.pD), cx, cy - Math.round(92 * r / 214), 26, t.accent2 || t.accent, { align: 'center', font: 'bold', spacing: 1.5 });
+            cv.text('TARGET ' + G.fmt(G.hold('d.tg', tg, DIAL_HOLD), u.pD), cx, cy - Math.round(92 * r / 214), 26, t.accent2 || t.accent, { align: 'center', font: 'bold', spacing: 1.5 });
         }
 
         /**

@@ -1,7 +1,7 @@
 {
   "id": "chepa_racing",
   "title": "Chepa Racing",
-  "description": "Chepa Racing tuner dashboard: temperatures, boost with target, ethanol, MHD map switching, knock and misfires per cylinder, boost vs target chart, tyres",  "version": "0.4.0",
+  "description": "Chepa Racing tuner dashboard: temperatures, boost with target, ethanol, MHD map switching, knock and misfires per cylinder, boost vs target chart, tyres",  "version": "0.4.1",
   "vendor": "custom",
   "loggingId": "OAB2",
   "iconGlyph": "CR",

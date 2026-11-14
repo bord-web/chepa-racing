@@ -2,10 +2,11 @@
 /**
  * tune.js - the tuner values for the dashboard, and their history for the boost chart.
  *
- * Design stage: the engine-unit values (boost and its target, intake air, gearbox oil, ethanol,
- * knock retard and misfires per cylinder) are simulated from engine speed and torque
- * (kit/car.js: the car, the emulator's sliders or the demo drive), scaled to the engine's
- * maximum boost and torque from the settings. Later they come from the DME over UDS.
+ * Design stage: the engine-unit values (boost and its target, intake air, gearbox oil, knock
+ * retard and misfires per cylinder) are simulated from engine speed and torque (kit/car.js: the
+ * car, the emulator's sliders or the demo drive), scaled to the engine's maximum boost and torque
+ * from the settings. Later they come from the DME over UDS. Ethanol already does on the car
+ * (ethanol.js, fed in as d.ethanol); it is simulated (E37) only in the demo.
  *
  *   const tune = new Tune(() => ({ maxBoost, maxTorque }));
  *   car.onSample((d, t) => tune.feed(d, t), () => tune.reset());
@@ -30,7 +31,7 @@ class Tune {
         this.misfire = new Array(CYL).fill(0);
         this.peak = null;
         this.hist = [];
-        this.now = { retard: this.retard, misfire: this.misfire, ethanol: 37 };
+        this.now = { retard: this.retard, misfire: this.misfire, ethanol: null };
     }
 
     /**
@@ -92,7 +93,8 @@ class Tune {
             rpm, load, pedal, speed: d.speed, boost, target, peak: this.peak,
             torque, power: isNum(torque) && isNum(rpm) ? Math.max(0, torque * rpm / 7121) : null,   // mechanical hp
             oil: d.oil, coolant: d.coolant, gearbox: this.gearbox, iat: this.iat,
-            ethanol: 37 + 0.4 * Math.sin(t / 200000),
+            // ethanol: the DME's (ethanol.js, d.ethanol) on the car; simulated only in the demo
+            ethanol: d.demo ? 37 + 0.4 * Math.sin(t / 200000) : isNum(d.ethanol) ? d.ethanol : null,
             retard: this.retard, misfire: this.misfire, demo: d.demo,
         };
         if (t - this.lastHist >= HIST_STEP) {
