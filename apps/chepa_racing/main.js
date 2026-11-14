@@ -36,7 +36,7 @@ const PEDAL_IF = 'de.bmw.powertrain.AcceleratorPedal';
 const PEDAL_MS = 1000;                   // a pedal value older than this counts as none
 const GO = '#2fd27a';
 const CONFIRM_MS = 5000;
-const DIAL_HOLD = 200;                   // the boost dial's numbers: 5 a second (as the OEM cluster's), the car's samples come at 20 Hz
+const DIAL_HOLD = 333;                   // the boost dial's numbers: 3 a second, the car's samples come at 20 Hz
 const MAP_NAMES = { none: '', stock: 'Stock', valet: 'Valet', street: 'Street', s1: 'Stage 1', s2: 'Stage 2', s2p: 'Stage 2+',
     e30: 'E30', e40: 'E40', e50: 'E50', e85: 'E85', race: 'Race', track: 'Track' };
 // the four temperatures: settings keys, the bar's end (deg C, at least the red limit + 20)
