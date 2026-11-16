@@ -2,15 +2,14 @@
 /**
  * tune.js - the tuner values for the dashboard, and their history for the boost chart.
  *
- * Design stage: the engine-unit values (boost and its target, intake air, gearbox oil, knock
- * retard and misfires per cylinder) are simulated from engine speed and torque (kit/car.js: the
- * car, the emulator's sliders or the demo drive), scaled to the engine's maximum boost and torque
- * from the settings. Later they come from the DME over UDS. Ethanol already does on the car
- * (ethanol.js, fed in as d.ethanol); it is simulated (E37) only in the demo.
+ * On the car the engine-unit values come from the DME (dme.js: boost and its target, intake air,
+ * gearbox oil, knock retard and misfires per cylinder; ethanol.js: ethanol), none where it gives none.
+ * In the demo drive they are simulated from engine speed and torque (kit/car.js), scaled to the
+ * engine's maximum boost and torque from the settings.
  *
  *   const tune = new Tune(() => ({ maxBoost, maxTorque }));
  *   car.onSample((d, t) => tune.feed(d, t), () => tune.reset());
- *   tune.now   -> { oil, coolant, gearbox, iat, ethanol, boost, target, rpm, speed, pedal, torque, power, retard[6], misfire[6] }
+ *   tune.now   -> { oil, coolant, gearbox, iat, ethanol, boost, target, peak, rpm, speed, pedal, torque, power, retard[6], misfire[6] }
  *   tune.hist  -> [[t, boost, target, rpm], ...] at 10 Hz, the last 3 minutes
  */
 const CYL = 6;
@@ -51,6 +50,10 @@ class Tune {
         return 40 + (maxTorque - 40) * clamp(throttle, 0, 1) * curve;
     }
 
+    /**
+     * One sample. On the car d carries the DME's values (dme.js: boost, target, iat, gearbox, retard[6],
+     * misfire[6]; ethanol.js: ethanol), each null without one; the demo drive's are simulated here.
+     */
     feed(d, tMs) {
         const t = tMs || Date.now(), dt = this.lastT ? clamp((t - this.lastT) / 1000, 0, 0.25) : 0.05;
         this.lastT = t;
@@ -62,22 +65,49 @@ class Tune {
         let torque = isNum(d.torque) ? d.torque : null;
         if (d.demo && isNum(d.throttle) && isNum(rpm)) torque = Tune.demoTorque(rpm, d.throttle, lim.maxTorque, spool);
         const load = clamp(((torque === null ? 40 : torque) - 40) / (lim.maxTorque * 0.85), 0, 1);
-        const target = Tune.target(rpm, load, lim.maxBoost * 0.85, spool);
+        const num = (v) => (isNum(v) ? v : null), cyl = (a) => Array.from({ length: CYL }, (_, i) => num(a && a[i]));
+        let boost, target, iat, gearbox, retard, misfire;
+        if (d.demo) {
+            target = Tune.target(rpm, load, lim.maxBoost * 0.85, spool);
+            this.simulate(d, dt, rpm, load, target, big);
+            boost = this.x + (Math.random() - 0.5) * 0.02;
+            ({ iat, gearbox, retard, misfire } = this);
+        } else {
+            boost = num(d.boost); target = num(d.target); iat = num(d.iat); gearbox = num(d.gearbox);
+            retard = cyl(d.retard); misfire = cyl(d.misfire);
+        }
+        if (boost > 0 && (this.peak === null || boost > this.peak)) this.peak = boost;
+
+        // accelerator (0..100 %): the demo drive's throttle, a pedal value when the car gives one, else engine load
+        const pedal = isNum(d.throttle) ? d.throttle * 100 : isNum(d.pedal) ? d.pedal : torque === null ? null : load * 100;
+        this.now = {
+            rpm, load, pedal, speed: d.speed, boost, target, peak: this.peak,
+            torque, power: isNum(torque) && isNum(rpm) ? Math.max(0, torque * rpm / 7121) : null,   // mechanical hp
+            oil: d.oil, coolant: d.coolant, iat, gearbox,
+            // ethanol: the DME's (ethanol.js, d.ethanol) on the car; simulated only in the demo
+            ethanol: d.demo ? 37 + 0.4 * Math.sin(t / 200000) : num(d.ethanol),
+            retard, misfire, demo: d.demo,
+        };
+        if (t - this.lastHist >= HIST_STEP) {
+            this.lastHist = t;
+            this.hist.push([t, boost, target, rpm]);
+            while (this.hist.length && t - this.hist[0][0] > HIST_MS) this.hist.shift();
+        }
+    }
+
+    /** The demo drive's engine-unit values: boost after its target, intake air, gearbox oil, knock retard, misfires. */
+    simulate(d, dt, rpm, load, target, big) {
         // the turbos follow their target with lag and a little overshoot (second order)
         if (isNum(target)) {
             const w = 8 - big * 2, z = 0.55;
             let h = dt;
             while (h > 0) { const s = Math.min(h, 0.01); const a = w * w * (target - this.x) - 2 * z * w * this.v; this.v += a * s; this.x += this.v * s; h -= s; }
         }
-        const boost = this.x + (Math.random() - 0.5) * 0.02;
-        if (boost > 0 && (this.peak === null || boost > this.peak)) this.peak = boost;
-
         // intake air heats with boost, cools with airflow; gearbox oil follows engine oil slowly
         const amb = 22, spd = isNum(d.speed) ? d.speed : 0;
-        this.iat += dt * (Math.max(0, boost) * load * 2.2 - (this.iat - amb - 3) * 0.015 * (1 + spd / 50));
+        this.iat += dt * (Math.max(0, this.x) * load * 2.2 - (this.iat - amb - 3) * 0.015 * (1 + spd / 50));
         const oil = isNum(d.oil) ? d.oil : 60;
         this.gearbox += dt * (0.012 * (oil - 4 - this.gearbox) + load * 0.04);
-
         // knock retard: high load and hot intake air pull timing (cylinder 5 most), recovering 1.2 deg/s
         const hot = this.iat > 45 ? 1.8 : 1;
         for (let i = 0; i < CYL; i++) {
@@ -85,22 +115,6 @@ class Tune {
             const chance = load > 0.75 && rpm > 3800 ? dt * (i === 4 ? 0.9 : 0.22) * hot : 0;
             if (Math.random() < chance) this.retard[i] = Math.max(-6, this.retard[i] - (1.5 + Math.random() * (i === 4 ? 3 : 1.5)));
             if (load > 0.85 && rpm > 5500 && Math.random() < dt * (i === 4 ? 0.05 : 0.004)) this.misfire[i]++;
-        }
-
-        // accelerator (0..100 %): the demo drive's throttle, a pedal value when the car gives one, else engine load
-        const pedal = isNum(d.throttle) ? d.throttle * 100 : isNum(d.pedal) ? d.pedal : torque === null ? null : load * 100;
-        this.now = {
-            rpm, load, pedal, speed: d.speed, boost, target, peak: this.peak,
-            torque, power: isNum(torque) && isNum(rpm) ? Math.max(0, torque * rpm / 7121) : null,   // mechanical hp
-            oil: d.oil, coolant: d.coolant, gearbox: this.gearbox, iat: this.iat,
-            // ethanol: the DME's (ethanol.js, d.ethanol) on the car; simulated only in the demo
-            ethanol: d.demo ? 37 + 0.4 * Math.sin(t / 200000) : isNum(d.ethanol) ? d.ethanol : null,
-            retard: this.retard, misfire: this.misfire, demo: d.demo,
-        };
-        if (t - this.lastHist >= HIST_STEP) {
-            this.lastHist = t;
-            this.hist.push([t, boost, target, rpm]);
-            while (this.hist.length && t - this.hist[0][0] > HIST_MS) this.hist.shift();
         }
     }
 

@@ -659,6 +659,7 @@ function gmeter(cv, t, cx, cy, r, g) {
  * tabs go there and the display draws them in the header up in the HMI's title strip, so the
  * page content gets the whole screen below it. Otherwise a slim tab bar (BAR_H) along the top.
  * Each drawn tab is left in cv.tabRects ({ i, x, y, w, h }), so a touch on it can open that page.
+ * title: the app's art (bake_art.js) for the header in place of its name, e.g. a logo.
  */
 const BAR_H = 36, TOP = 44, BOTTOM = 512;
 /**
@@ -672,8 +673,8 @@ function tabWidths(cv, names, size, opt, min, pad, room, pad0) {
     const p = Math.max(pad0, Math.min(pad, (room - tw.reduce((a, b) => a + b, 0)) / Math.max(1, names.length)));
     return tw.map((w) => w + p);
 }
-function frame(cv, t, tabs, sel, badges) {
-    if (cv.chrome) { cv.chrome.tabs = { tabs: tabs || [], sel, badges: (badges || []).filter(Boolean) }; return; }
+function frame(cv, t, tabs, sel, badges, title) {
+    if (cv.chrome) { cv.chrome.tabs = { tabs: tabs || [], sel, badges: (badges || []).filter(Boolean), title }; return; }
     const W = cv.w, S = t.sel || t.accent;
     cv.fillRect(0, 0, W, BAR_H, t.bg);
     cv.fillRect(0, 0, W, BAR_H, withAlpha('#ffffff', 0.07));
@@ -712,9 +713,30 @@ function badgeRow(cv, t, xr, y, h, size, badges) {
     return bx;
 }
 
+/** Art baked by kit/tools/bake_art.js (fonts.register'ed) in its layers, h px tall, its box's top left at x, y. Returns its width. */
+function art(cv, A, x, y, h) {
+    for (const [k, c, a] of A.layers) if (k !== 'tyres') cv.text(k, x, y, h, withAlpha(c, a == null ? 1 : a), { font: A.name, literal: true });
+    return h * A.box[0] / A.box[1];
+}
+/**
+ * The header's title in `room` px: the app's name, or its art (a logo) th px tall, smaller (down to 55 %) where the
+ * tabs leave less room. { th, w }, or null: it doesn't fit (the tabs keep their room).
+ */
+function titleFit(cv, title, size, th, room) {
+    if (!title) return null;
+    if (!title.layers) { const w = cv.textWidth(title, size); return w <= room ? { th, w } : null; }
+    const k = title.box[0] / title.box[1], fh = Math.min(th, Math.floor(room / k));
+    return fh >= th * 0.55 ? { th: fh, w: fh * k } : null;
+}
+function drawTitle(cv, t, title, x, y, h, size, th) {
+    if (title.layers) art(cv, title, x, y + (h - th) / 2, th);
+    else cv.text(title, x, y + h / 2 + size * 0.36, size, t.text);
+}
+
 /**
  * Full-screen header in screen pixels (x, y, w, h): the app's name, its page tabs (selected
  * one lit, with an underline) and badges on the right. Tabs that don't fit drop the name.
+ * title: the app's name, or its art (bake_art.js: a logo, 90 % of the header's height, smaller where the tabs need the room).
  * flat: no sheen (plain t.bg).
  * compact: smaller text, badges right after the tabs and only as wide as that content, so the
  * HMI's own status strip (radio station, phone signal, icons) can show to the right of it.
@@ -732,10 +754,10 @@ function header(cv, t, x, y, w, h, title, tabs, sel, badges, flat, compact) {
     const tw = tabWidths(cv, names, 20, opt, 170, 64, right - x - 20, 24);
     const tabsW = tw.reduce((a, b) => a + b, 0);
     let tx = x + 20;
-    const tsize = 38, titleW = title ? cv.textWidth(title, tsize) : 0;
-    if (title && tx + titleW + 40 + tabsW <= right) {
-        cv.text(title, tx, y + h / 2 + tsize * 0.36, tsize, t.text);
-        tx += titleW + 40;
+    const tsize = 38, ti = titleFit(cv, title, tsize, Math.round(h * 0.9), right - tx - 40 - tabsW);
+    if (ti) {
+        drawTitle(cv, t, title, tx, y, h, tsize, ti.th);
+        tx += ti.w + 40;
     }
     cv.tabRects = [];
     names.forEach((n, i) => {
@@ -759,21 +781,21 @@ function headerCompact(cv, t, x, y, w, h, title, tabs, sel, badges) {
     const bh = 30, bsize = 17;
     const bws = (badges || []).map((b) => Math.max(bh * 3.5, cv.textWidth(b.text, bsize, bopt) + bh));
     const badgesW = bws.reduce((a, b) => a + b + bh * 0.4, 0);
-    const tsize = 32, titleW = title ? cv.textWidth(title, tsize) : 0;
     const room = w - 20 - (badgesW ? badgesW + 12 : 0);
     const tw = tabWidths(cv, names, 18, opt, 132, 44, room - 20, 20);
     const tabsW = tw.reduce((a, b) => a + b, 0);
-    const showTitle = title && titleW + 32 + tabsW <= room;
+    // the tabs start at x + 20 and end by x + room: the title gets what they leave
+    const tsize = 32, ti = titleFit(cv, title, tsize, Math.round(h * 0.9), room - 20 - 32 - tabsW);
     // only as wide as the content: the rest of the strip stays the HMI's
-    let end = x + 20 + (showTitle ? titleW + 32 : 0);
+    let end = x + 20 + (ti ? ti.w + 32 : 0);
     names.forEach((n, i) => { if (end + tw[i] <= x + room) end += tw[i]; });
     end = Math.min(x + w, end + (badgesW ? 12 + badgesW : 0) + 16);
     cv.fillRect(x, y, end - x, h, t.bg);
     cv.fillRect(x, y + h - 2, end - x, 2, withAlpha('#ffffff', 0.22));
     let tx = x + 20;
-    if (showTitle) {
-        cv.text(title, tx, y + h / 2 + tsize * 0.36, tsize, t.text);
-        tx += titleW + 32;
+    if (ti) {
+        drawTitle(cv, t, title, tx, y, h, tsize, ti.th);
+        tx += ti.w + 32;
     }
     cv.tabRects = [];
     names.forEach((n, i) => {
@@ -859,7 +881,7 @@ function stripes(cv, t, x, y, w) {
 }
 
 module.exports = {
-    BAR_H, TOP, BOTTOM, pageBottom, MARGIN, toMargin, frame, header, layer, onLayerDrop, panel, segBar, radial, needle, ring, bar, stat, readout,
+    BAR_H, TOP, BOTTOM, pageBottom, MARGIN, toMargin, frame, header, art, layer, onLayerDrop, panel, segBar, radial, needle, ring, bar, stat, readout,
     shiftLights, gear, chart, table, pill, tyres, gmeter, menuBar, stripes, button, onConfirm, smooth, hold, niceStep,
     fmt, isNum, clamp, mix, zoneColor, withAlpha, ramp,
 };

@@ -6,7 +6,7 @@
  *           limits from the settings (blue / green / yellow / red); in yellow or red the whole
  *           block lights up. Centre (setting): the boost dial up to the engine's max boost, the
  *           target on its rim; or the tyres (tyres.js): a black M3 from above (car_art.js) with
- *           each tyre's pressure, target and temperature. Right: map (tap: the map page) and ethanol (E37: from the DME, ethanol.js), then a 3 x 2
+ *           each tyre's pressure, target and temperature; or the Chepa Racing CR shield (logo_art.js). Right: map (tap: the map page) and ethanol (E37: from the DME, ethanol.js), then a 3 x 2
  *           grid of cylinders: knock retard and misfires of the last pull (held until the next
  *           pull starts; pulls.js), or live (setting, or the pull log off). Full screen: it all grows
  *           into the screen's whole height (vitalsRoom)
@@ -18,6 +18,8 @@
  *   Maps    (from the map tile) maps 1-4 for MHD: tap a map, tap again to switch
  *   Dev logs  (a tab only with the setting "Dev logs tab") where this car keeps the fuel's ethanol: the
  *           DME's replies to every candidate (ethanol.js probe), raw, to be photographed with the cluster
+ * On the car boost, its target, intake air, gearbox oil, knock retard and misfires come from the DME
+ * (dme.js), the ethanol too (ethanol.js); the demo drive simulates them (tune.js).
  * No bar buttons besides the pager and Settings: the kit then draws no bar under the page.
  */
 const mgu = require('./kit/mgu');
@@ -29,8 +31,11 @@ const { MapControl, MAPS } = require('./maps');
 const { Pulls, KEEP } = require('./pulls');
 const { Tyres } = require('./tyres');
 const { Ethanol } = require('./ethanol');
+const { Dme } = require('./dme');
 const CAR_ART = require('./car_art');
-require('./kit/fonts').register(CAR_ART.name, CAR_ART);
+// the Chepa Racing CR shield (logo_art.js): Vitals' centre panel (a setting)
+const LOGO = require('./logo_art');
+[CAR_ART, LOGO].forEach((a) => require('./kit/fonts').register(a.name, a));
 
 const W = 1600, H = 520;
 const PAGES = ['vitals', 'boost', 'log'];
@@ -70,9 +75,11 @@ mgu.run({
         }, ctx.log).then((s) => ctx.log.info('signal AcceleratorPedal ' + (s && s.error ? 'error: ' + s.error : 'subscribed'))).catch(() => {});
         // the fuel's ethanol content from the DME (ethanol.js), on the car only
         const eth = new Ethanol(ctx, () => !car.data().demo);
+        // boost, target, intake air, gearbox oil, knock retard and misfires from the DME (dme.js), over the same link
+        const dme = new Dme(ctx, () => !car.data().demo, () => eth._link());
         car.onSample((d, t) => {
             const live = !d.demo && pedal.v !== null && Date.now() - pedal.t < PEDAL_MS;
-            tune.feed(d.demo ? d : Object.assign({}, d, { ethanol: eth.value }, live ? { pedal: pedal.v } : null), t);
+            tune.feed(d.demo ? d : Object.assign({}, d, dme.values(), { ethanol: eth.value }, live ? { pedal: pedal.v } : null), t);
             if (d.demo) tyres.step(d, t);
             // the log off: no pulls are caught at all (the tiles show live values)
             pulls.feed(t, Object.assign({ map: maps.map }, tune.now), { start: settings.get('pullStart') || 80, minS: settings.get('pullMin') || 2, log: logOn() });
@@ -150,7 +157,9 @@ mgu.run({
             TEMPS.forEach((d, i) => temperature(cv, t, u, i, d, n[d.key], now, R));
             cv.fillRect(524, R.y0 + 8, 1, R.y1 - R.y0 - 10, withAlpha('#ffffff', 0.12));
             cv.fillRect(1076, R.y0 + 8, 1, R.y1 - R.y0 - 10, withAlpha('#ffffff', 0.12));
-            if (settings.get('centre') === 'tyres') tyrePanel(cv, t, n, u, R);
+            const centre = settings.get('centre');
+            if (centre === 'tyres') tyrePanel(cv, t, n, u, R);
+            else if (centre === 'logo') logoPanel(cv, R);
             else boostDial(cv, t, n, u, R);
 
             // ---- map (a tap opens the map page) and ethanol: taller (and their numbers bigger) with more room
@@ -161,12 +170,13 @@ mgu.run({
             cv.text('MAP', 1120, ty + 32, 20, t.dim, { font: 'bold', spacing: 2 });
             const nm = maps.map ? mapName(maps.map) : '';
             if (nm) cv.text(nm.toUpperCase(), 1310, ty + 32, 18, t.accent2 || t.accent, { align: 'right', font: 'bold', spacing: 1 });
-            cv.text(maps.map ? String(maps.map) : '-', 1214, ty + th - 28, big, t.accent2 || t.accent, { align: 'center', font: 'num' });
+            cv.text(maps.map ? String(maps.map) : '-', 1214, ty + th - 38, big, t.accent2 || t.accent, { align: 'center', font: 'num' });
             cv.text('TAP TO CHANGE', 1214, ty + th - 8, 14, t.dim, { align: 'center', font: 'bold', spacing: 2 });
             cv.target(1100, ty, 228, th, openMaps, 'mapTile');
             tile(1340, ty, 236, th);
             cv.text('FUEL', 1360, ty + 32, 20, t.dim, { font: 'bold', spacing: 2 });
-            cv.text(ethText(n.ethanol), 1458, ty + th - 18, big, GO, { align: 'center', font: 'num' });
+            // on the map number's baseline
+            cv.text(ethText(n.ethanol), 1458, ty + th - 38, big, GO, { align: 'center', font: 'num' });
 
             cylinders(cv, t, n, now, { top: ty + th, y1: R.y1 });
         }
@@ -189,6 +199,12 @@ mgu.run({
                 cv.quad([[ox - nx, oy - ny], [ox + nx, oy + ny], [tx, ty], [tx, ty]], c);
             }
             cv.text('TARGET ' + G.fmt(G.hold('d.tg', tg, DIAL_HOLD), u.pD), cx, cy - Math.round(92 * r / 214), 26, t.accent2 || t.accent, { align: 'center', font: 'bold', spacing: 1.5 });
+        }
+
+        /** The Chepa Racing CR shield, as big as the panel lets it (between the temperatures and the map tile). */
+        function logoPanel(cv, R) {
+            const A = LOGO, h = Math.min(R.y1 - R.y0 - 40, 500 * A.box[1] / A.box[0]);
+            G.art(cv, A, 800 - h * A.box[0] / A.box[1] / 2, Math.round((R.y0 + R.y1 - h) / 2), h);
         }
 
         /**
@@ -453,9 +469,16 @@ mgu.run({
                 (st ? '    requests ' + st.sent + ', answers ' + st.replies + ', no answer ' + st.missed + ', busy ' + (ls.busy || 0) : ''), 40, 122, 22, t.text, { font: 'bold' });
             cv.text('App shows ' + ethText(n.ethanol) + (eth.source ? ' (from ' + eth.source + ', ' + ago(eth.t) + ')' : ' (no value from the DME)') +
                 '    ·    DME asked ' + ago(eth.probedAt), 40, 154, 22, G.isNum(n.ethanol) ? GO : t.warn, { font: 'bold' });
+            // the live values from the DME (dme.js): how they are read, and what they are now
+            const ds = dme.state(), dv = dme.values(), f = (v, d) => G.fmt(v, d);
+            cv.text('DME live: ' + (ds.said || 'not asked yet') + (ds.multi === true ? ', several a request' : ds.multi === false ? ', one a request' : '') +
+                ', ' + ds.rate.toFixed(1) + ' values/s' + (ds.absent.length ? ', not given: ' + ds.absent.join(' ') : '') +
+                '    ·    boost ' + f(dv.boost, 2) + ' / ' + f(dv.target, 2) + ' bar, intake ' + f(dv.iat, 1) + ' °C, gearbox ' + f(dv.gearbox, 0) +
+                ' °C, knock ' + f(dv.kr, 1) + '°, angles ' + dv.angle.map((a) => f(a, 1)).join(' '), 40, 186, 20,
+                G.isNum(dv.boost) ? GO : t.warn, { font: 'bold' });
             // the replies: one row per request (ethanol.js PROBES), under them the last notes
             const cols = [['Request', 40], ['What', 190], ['Reply bytes', 560], ['Value', 1090]];
-            const notes = eth.notes.slice(-3), top = 196, nTop = bottom - notes.length * 24;
+            const notes = eth.notes.slice(-3), top = 226, nTop = bottom - notes.length * 24;
             cols.forEach(([h, x]) => cv.text(h.toUpperCase(), x, top - 8, 15, t.dim, { font: 'bold', spacing: 1.5 }));
             cv.fillRect(32, top, 1544, 1, withAlpha('#ffffff', 0.2));
             const rows = eth.probed || [], rh = Math.min(34, (nTop - top - 8) / Math.max(1, rows.length));

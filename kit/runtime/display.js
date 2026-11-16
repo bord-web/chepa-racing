@@ -212,13 +212,13 @@ class Display {
     }
     /** Settings is the header's last tab where the kit runs the screen (the app has a Settings button). */
     hasSettings() { return !!(this.screen && (this.screen.buttons || []).some((b) => b[0] === 'BTN_SETTINGS')); }
-    /** The header's tabs: the app's, then Settings. { tabs, sel, badges, settings: index or -1 } */
+    /** The header's tabs: the app's, then Settings. { tabs, sel, badges, settings: index or -1, title: the app's art or undefined } */
     _tabList() {
         const base = this.tabInfo || { tabs: [], sel: -1, badges: [] };
         const tabs = (base.tabs || []).slice();
         const settings = this.own() && this.hasSettings() ? tabs.push('Settings') - 1 : -1;
         const sel = this.sheet && this.sheet.settings ? settings : this.sheet ? -1 : base.sel;
-        return { tabs, sel, badges: base.badges || [], settings };
+        return { tabs, sel, badges: base.badges || [], settings, title: base.title };
     }
     /** Open header tab i: the app's page, or the settings (Settings tab). */
     _openTab(i) {
@@ -771,7 +771,7 @@ class Display {
         // right of it the HMI's strip shows through (radio station, phone signal, status icons)
         const hx = HMI.left - pl.x;
         const end = G.header(c, Object.assign({}, t, { bg: HMI.headBg }), hx, 0, HMI.status.x - pl.x - hx, FULL.headH,
-            this.screen.title || this.spec.title, tb.tabs, tb.sel, tb.badges, true, true);
+            tb.title || this.screen.title || this.spec.title, tb.tabs, tb.sel, tb.badges, true, true);
         // the HMI's own title is in the strip under the header: a narrower header (a sheet: no tabs) stays
         // as wide as the app's widest, so none of that title shows beside it
         if (!this.sheet) this.headMax = Math.max(this.headMax || 0, end);
