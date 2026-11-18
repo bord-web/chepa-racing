@@ -21,14 +21,15 @@
  * is dropped.
  *
  * Accelerator: n.pedal (0..100), the pedal's real position (the demo drive's throttle). Without one no
- * pull starts, and one in progress ends as if the pedal was released.
+ * pull starts; one in progress goes on with the last value (a gap in the readings is no released pedal) and
+ * ends when there has been none for LOST_MS.
  */
 const fs = require('fs');
 const path = require('path');
 
 const CYL = 6, KEEP = 10;
 const STEP = 0.4;                 // deg: a deeper retard than the last sample by this much = one more knock event
-const START_MS = 300, END_MS = 700, TAIL_MS = 1500;
+const START_MS = 300, END_MS = 700, TAIL_MS = 1500, LOST_MS = 10000;
 const isNum = (x) => typeof x === 'number' && isFinite(x);
 
 class Pulls {
@@ -39,6 +40,7 @@ class Pulls {
         try { const j = JSON.parse(fs.readFileSync(this.file, 'utf8')); if (Array.isArray(j)) this.list = j.slice(0, KEEP); } catch (e) { /* none yet */ }
         this.cur = null; this.above = 0; this.below = 0; this.prev = null; this.mf0 = null;
         this.tail = null; this.t = 0;     // the pull just logged: { c, mf0, until (ms) }; the last sample's time
+        this.pedal = 0; this.pedalAt = 0; // the last pedal value and when it came
         this.shown = this.list[0] || null;
     }
 
@@ -49,8 +51,8 @@ class Pulls {
         this.t = t;
         this._tail(t, n);
         if (opt.log === false) { if (this.cur || this.above) this.reset(); return; }
-        if (!isNum(n.pedal) && !this.cur) { this.above = 0; return; }
-        const p = isNum(n.pedal) ? n.pedal : 0;
+        if (isNum(n.pedal)) { this.pedal = n.pedal; this.pedalAt = t; } else if (!this.cur) { this.above = 0; return; }
+        const p = t - this.pedalAt < LOST_MS ? this.pedal : 0;
         if (!this.cur) {
             if (p >= opt.start) {
                 if (!this.above) this.above = t;

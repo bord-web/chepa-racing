@@ -27,7 +27,9 @@
  * range; without 4536, 4AB0 (none at its end).
  *
  * GROUPS are read on their own: each has its own request, pace and failures, so one that fails leaves the
- * others running. Requests go by TURNS: half of them the boost (the dial follows it), a quarter the knock, the
+ * others running. The pedal's 5814 comes along in the boost's request, as often as the boost and at no cost; the
+ * group 'pedal' is for a DME without it, and while 5814 answers its turns go to the knock.
+ * Requests go by TURNS: half of them the boost (the dial follows it), a quarter the knock, the
  * rest the pedal and the slow values; a turn whose group isn't due passes to the next. During a pull (pulling())
  * PULL_TURNS: more of the knock, the misfire counters every second and read once more right after it, the
  * temperatures only when the link has time left. The link takes one request
@@ -71,7 +73,7 @@ const CYL = 6;
 const ANGLES = [0x4A49, 0x4A4A, 0x4A4C, 0x4A4D, 0x4A4E, 0x4A4F];
 const MISFIRES = [0x4B23, 0x4B24, 0x4B25, 0x4B30, 0x4B31, 0x4B32];
 const PEDALS = [0x5814, 0x480B, 0x5545];
-const PEDAL_STALE = 2000;
+const PEDAL_STALE = 6000;                // the pedal is read about once a second in a pull, less on a slow link
 const OBD_PEDALS = [
     { pid: 0x5A, v: (x) => x / 2.55 },
     { pid: 0x49, v: (x) => Math.max(0, Math.min(100, (x / 2.55 - 14.5) * 100 / (82 - 14.5))) },
@@ -95,9 +97,9 @@ DIDS[0x5545] = { len: 2, v: (b) => u16(b) * 0.025 };
 // what belongs to one moment stays in one request (boost and its deviation; the cylinders' knock); what changes
 // slowly is read slowly and stays on screen through a gap
 const GROUPS = [
-    { name: 'boost', every: 100, stale: 2500, ids: [0x4205, 0x4536, 0x4AB0] },
+    { name: 'boost', every: 100, stale: 2500, ids: [0x4205, 0x4536, 0x4AB0, 0x5814] },
     { name: 'knock', every: 100, stale: 2500, ids: [0x554C].concat(ANGLES) },
-    { name: 'pedal', every: 200, stale: PEDAL_STALE, ids: PEDALS },
+    { name: 'pedal', every: 200, stale: PEDAL_STALE, ids: [0x480B, 0x5545] },
     { name: 'intake', every: 2000, stale: 30000, ids: [0x580F] },
     { name: 'gearbox', every: 5000, stale: 30000, ids: [0x4650] },
     { name: 'ambient', every: 10000, stale: 60000, ids: [0x4201] },
@@ -108,6 +110,7 @@ const TURNS = ['boost', 'knock', 'boost', 'pedal', 'boost', 'knock', 'boost', 's
 const PULL_TURNS = ['boost', 'knock', 'boost', 'knock', 'boost', 'misfire', 'boost', 'knock', 'boost', 'knock', 'boost', 'pedal'];
 const STALE = {};
 GROUPS.forEach((g) => g.ids.forEach((d) => { STALE[d] = g.stale; }));
+STALE[0x5814] = PEDAL_STALE;
 const hex4 = (d) => ('000' + d.toString(16).toUpperCase()).slice(-4);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -205,11 +208,12 @@ class Dme {
         const at = (x) => Math.max(x.at + (this.pull && x.pullEvery || x.every), x.hold);
         const soonest = (list) => list.reduce((a, x) => (at(x) < at(a) ? x : a));
         const of = (turn) => soonest(this.groups.filter((x) => (turn === 'slow' ? TURNS.indexOf(x.name) < 0 : x.name === turn)));
+        const pedalRead = this.get(0x5814, now) !== null;
         for (let i = 0; i < turns.length; i++) {
-            const k = (this.turn + i) % turns.length, g = of(turns[k]);
+            const k = (this.turn + i) % turns.length, g = of(turns[k] === 'pedal' && pedalRead ? 'knock' : turns[k]);
             if (at(g) <= now) return { g, due: at(g), turn: (k + 1) % turns.length };
         }
-        const g = soonest(this.groups);
+        const g = soonest(this.groups.filter((x) => !(pedalRead && x.name === 'pedal')));
         return { g, due: at(g), turn: this.turn };
     }
 
