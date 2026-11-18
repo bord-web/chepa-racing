@@ -1,7 +1,7 @@
 {
   "id": "chepa_racing",
   "title": "Chepa Racing",
-  "description": "Chepa Racing tuner dashboard: temperatures, boost with target, ethanol, MHD map switching, knock and misfires per cylinder, boost vs target chart, tyres",  "version": "0.5.7",
+  "description": "Chepa Racing tuner dashboard: temperatures, boost with target, ethanol, MHD map switching, knock and misfires per cylinder, boost vs target chart, tyres",  "version": "0.5.8",
   "vendor": "custom",
   "loggingId": "OAB2",
   "iconGlyph": "CR",
@@ -28,6 +28,8 @@
     { "key": "page", "label": "Start page", "type": "choice", "default": "vitals", "options": [["vitals", "Vitals"], ["boost", "Boost chart"], ["log", "Pull log"]] },
     { "key": "centre", "label": "Vitals: centre panel", "type": "choice", "default": "boost",
       "options": [["boost", "Boost dial"], ["tyres", "Tyres: pressure and temperature"], ["logo", "Chepa Racing logo"]] },
+    { "key": "topTiles", "label": "Vitals: top right tiles", "type": "choice", "default": "power", "reset": 1,
+      "options": [["map", "Map and ethanol"], ["power", "Power and torque"]] },
 
     { "key": "pullLog", "label": "Pull log: record pulls", "type": "bool", "default": true },
     { "key": "retardView", "label": "Cylinder tiles show", "type": "choice", "default": "pull",

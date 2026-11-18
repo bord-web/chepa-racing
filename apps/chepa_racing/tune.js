@@ -10,7 +10,7 @@
  *   const tune = new Tune(() => ({ maxBoost, maxTorque }));
  *   car.onSample((d, t) => tune.feed(d, t), () => tune.reset());
  *   tune.now   -> { oil, coolant, gearbox, iat, ethanol, boost, target, peak, targetPeak, rpm, speed, pedal, torque, power, retard[6], misfire[6] }
- *                 peak, targetPeak: the highest boost and target lately (PeakHold)
+ *                 peak, targetPeak, powerPeak, torquePeak: the highest boost, target, power and torque lately (PeakHold)
  *   tune.hist  -> [[t, boost, target, rpm], ...] at 10 Hz, the last 3 minutes
  */
 const CYL = 6;
@@ -21,6 +21,8 @@ const isNum = (x) => typeof x === 'number' && isFinite(x);
 const HOLD_MS = 10000;                   // the peaks: how long a high stays once the pedal came back
 const HOLD_DROP = 20;                    // % of accelerator: this far back from where it was at the peak starts the count
 const FALL_MS = 70;                      // the peaks' fall on the dial: its time constant
+const RETARD_WARN = 3, RETARD_CRIT = 5;  // deg of knock retard: a cylinder's tile yellow, red from here
+const MISFIRE_WARN = 3, MISFIRE_CRIT = 5; // misfires: yellow, red above this many
 
 /**
  * The highest value lately (0 at the least): follows the value up at once and remembers where the pedal was then.
@@ -45,6 +47,9 @@ class PeakHold {
         return this.v;
     }
 }
+
+/** A tile's value is at its peak, as shown in whole numbers, and at `least` or more: its PEAK label is filled. */
+const atPeak = (v, peak, least) => isNum(v) && isNum(peak) && v >= least && Math.round(v) >= Math.round(peak);
 
 /** A peak on the dial as it is drawn: up with the value at once, down to it quickly and smoothly (about 0.4 s). */
 class Falling {
@@ -72,7 +77,7 @@ class Tune {
         this.iat = 24; this.gearbox = 32;
         this.retard = new Array(CYL).fill(0);
         this.misfire = new Array(CYL).fill(0);
-        this.holdBoost = new PeakHold(); this.holdTarget = new PeakHold();
+        this.resetPeaks();
         this.hist = [];
         this.now = { retard: this.retard, misfire: this.misfire, ethanol: null };
     }
@@ -122,10 +127,12 @@ class Tune {
         }
         // accelerator (0..100 %): the demo drive's throttle, or the pedal's real position; none without one
         const pedal = isNum(d.throttle) ? d.throttle * 100 : num(d.pedal);
+        const power = isNum(torque) && isNum(rpm) ? Math.max(0, torque * rpm / 7121) : null;   // mechanical hp
         this.now = {
             rpm, load, pedal, speed: d.speed, boost, target,
             peak: this.holdBoost.feed(boost, t, pedal), targetPeak: this.holdTarget.feed(target, t, pedal),
-            torque, power: isNum(torque) && isNum(rpm) ? Math.max(0, torque * rpm / 7121) : null,   // mechanical hp
+            powerPeak: this.holdPower.feed(power, t, pedal), torquePeak: this.holdTorque.feed(torque, t, pedal),
+            torque, power,
             oil: d.oil, coolant: d.coolant, iat, gearbox,
             // ethanol: the DME's (ethanol.js, d.ethanol) on the car; simulated only in the demo
             ethanol: d.demo ? 37 + 0.4 * Math.sin(t / 200000) : num(d.ethanol),
@@ -163,7 +170,12 @@ class Tune {
         }
     }
 
-    resetCounters() { this.misfire.fill(0); this.holdBoost = new PeakHold(); this.holdTarget = new PeakHold(); }
+    resetPeaks() {
+        this.holdBoost = new PeakHold(); this.holdTarget = new PeakHold();
+        this.holdPower = new PeakHold(); this.holdTorque = new PeakHold();
+    }
+
+    resetCounters() { this.misfire.fill(0); this.resetPeaks(); }
 }
 
 /**
@@ -189,11 +201,15 @@ function units(settings) {
 /** Ethanol content as the fuel's name: 37.4 % -> 'E37' (whole numbers only). */
 const ethText = (e) => (isNum(e) ? 'E' + Math.round(e) : 'E--');
 
-/** Severity of a cylinder: 0 fine, 1 some retard, 2 heavy retard or a misfire. */
+/**
+ * Severity of a cylinder, by whichever of the two is worse: 0 fine, 1 yellow (retard of 3 deg or more, or more than
+ * 3 misfires), 2 red (5 deg or more, or more than 5 misfires). The retard as shown on its tile, to a tenth of a degree.
+ */
 function cylLevel(retard, misfire) {
-    if (misfire > 0 || retard <= -3) return 2;
-    if (retard <= -1) return 1;
+    const r = isNum(retard) ? -Math.round(retard * 10) / 10 : 0, m = isNum(misfire) ? misfire : 0;
+    if (r >= RETARD_CRIT || m > MISFIRE_CRIT) return 2;
+    if (r >= RETARD_WARN || m > MISFIRE_WARN) return 1;
     return 0;
 }
 
-module.exports = { Tune, PeakHold, Falling, HOLD_MS, units, cylLevel, ethText, CYL, isNum, clamp };
+module.exports = { Tune, PeakHold, atPeak, Falling, HOLD_MS, units, cylLevel, ethText, CYL, isNum, clamp };

@@ -26,7 +26,7 @@ const mgu = require('./kit/mgu');
 const { withAlpha } = require('./kit/canvas');
 const G = require('./kit/gauges');
 const Car = require('./kit/car');
-const { Tune, Falling, units, cylLevel, ethText, CYL } = require('./tune');
+const { Tune, atPeak, Falling, units, cylLevel, ethText, CYL } = require('./tune');
 const { MapControl, MAPS } = require('./maps');
 const { Pulls, KEEP } = require('./pulls');
 const { Tyres } = require('./tyres');
@@ -45,6 +45,9 @@ const PEDAL_IF = 'de.bmw.powertrain.AcceleratorPedal';
 const GO = '#2fd27a';
 const CONFIRM_MS = 5000;
 const DIAL_HOLD = 333;                   // the boost dial's numbers: 3 a second, the car's samples come at 20 Hz
+const TILE_HOLD = 250;                   // the power and torque tiles' numbers: 4 a second
+const TILE_TOP = 1.1;                    // the tiles' scales end this far over the engine's maximum (setting)
+const TILE_LIT = 0.5;                    // a value at its peak fills the label from this part of the engine's maximum up
 const MAP_NAMES = { none: '', stock: 'Stock', valet: 'Valet', street: 'Street', s1: 'Stage 1', s2: 'Stage 2', s2p: 'Stage 2+',
     e30: 'E30', e40: 'E40', e50: 'E50', e85: 'E85', race: 'Race', track: 'Track' };
 // the four temperatures: settings keys, the bar's end (deg C, at least the red limit + 20)
@@ -167,18 +170,53 @@ mgu.run({
             // ---- map (a tap opens the map page) and ethanol: taller (and their numbers bigger) with more room
             const ty = R.y0, th = Math.round(150 + (R.y1 - R.y0 - 450) * 0.35), big = Math.round(96 * Math.min(1.12, th / 150));
             const tile = (x, y, w, h) => cv.roundRect(x, y, w, h, 12, withAlpha('#ffffff', 0.05));
-            tile(1100, ty, 228, th);
-            cv.strokeRoundRect(1100, ty, 228, th, 12, 1.5, withAlpha(t.accent2 || t.accent, 0.45));
-            cv.text('MAP', 1120, ty + 32, 20, t.dim, { font: 'bold', spacing: 2 });
-            const nm = maps.map ? mapName(maps.map) : '';
-            if (nm) cv.text(nm.toUpperCase(), 1310, ty + 32, 18, t.accent2 || t.accent, { align: 'right', font: 'bold', spacing: 1 });
-            cv.text(maps.map ? String(maps.map) : '-', 1214, ty + th - 38, big, t.accent2 || t.accent, { align: 'center', font: 'num' });
-            cv.text('TAP TO CHANGE', 1214, ty + th - 8, 14, t.dim, { align: 'center', font: 'bold', spacing: 2 });
-            cv.target(1100, ty, 228, th, openMaps, 'mapTile');
-            tile(1340, ty, 236, th);
-            cv.text('FUEL', 1360, ty + 32, 20, t.dim, { font: 'bold', spacing: 2 });
-            // on the map number's baseline
-            cv.text(ethText(n.ethanol), 1458, ty + th - 38, big, GO, { align: 'center', font: 'num' });
+            /**
+             * Power or torque: the value now on a slanted scale up to a little over the engine's maximum (max, setting) with
+             * a line at its peak (held as the boost's). The peak's label is filled while the value is at the peak. All of it
+             * changes 4 times a second.
+             */
+            const peakTile = (x, w, label, unit, v, peak, max) => {
+                const c = t.accent2 || t.accent, val = G.hold('tile.' + label, v, TILE_HOLD), pk = G.hold('tile.peak.' + label, peak, TILE_HOLD);
+                const lit = atPeak(val, pk, max * TILE_LIT);
+                tile(x, ty, w, th);
+                cv.text(label, x + 20, ty + 31, 18, t.dim, { font: 'bold', spacing: 2 });
+                const ps = 'PEAK ' + G.fmt(pk, 0), pw = cv.textWidth(ps, 16, { font: 'bold' }) + 22;
+                cv.roundRect(x + w - 12 - pw, ty + 10, pw, 28, 8, lit ? c : withAlpha(c, 0.14));
+                cv.text(ps, x + w - 12 - pw / 2, ty + 30, 16, lit ? t.bg : c, { align: 'center', font: 'bold' });
+                const s = G.fmt(val, 0), uw = cv.textWidth(unit, 24, { font: 'bold' }), num = Math.round(big * 0.875);
+                const size = Math.min(num, num * (w - 48 - uw) / cv.textWidth(s, num, { font: 'num' }));
+                const nw = cv.text(s, x + 20, ty + th - 40, size, t.text, { font: 'num' });
+                cv.text(unit, x + 28 + nw, ty + th - 40, 24, t.dim, { font: 'bold' });
+                // the scale, slanted as the temperature bars
+                const H = 12, SL = 6, bx = x + 20, by = ty + th - 28, bw = w - 40 - SL, stops = t.hotRamp || t.ramp;
+                const top = Math.max(max * TILE_TOP, G.isNum(pk) ? pk : 0), X = (a) => bx + G.clamp(a / top, 0, 1) * bw;
+                cv.quad([[bx + SL, by], [bx + bw + SL, by], [bx + bw, by + H], [bx, by + H]], t.track);
+                const xe = G.isNum(val) ? X(val) : bx;
+                if (xe - bx > SL) {
+                    cv.quad([[bx, by + H], [bx + SL, by], [bx + SL, by + H], [bx + SL, by + H]], G.ramp(stops, 0));
+                    cv.rampRect(bx + SL, by, xe - bx - SL, H, 0, stops, bx, bw + SL);
+                    cv.quad([[xe, by], [xe + SL, by], [xe, by + H], [xe, by + H]], G.ramp(stops, (xe - bx) / (bw + SL)));
+                    cv.quad([[xe - 4, by + H], [xe - 4 + SL, by], [xe + SL, by], [xe, by + H]], t.text);
+                }
+                if (G.isNum(pk)) cv.line(X(pk) + SL + 2, by - 5, X(pk) - 2, by + H + 5, 3, c);
+            };
+            if (settings.get('topTiles') === 'power') {
+                peakTile(1100, 228, 'POWER', 'HP', n.power, n.powerPeak, settings.get('maxPower') || 503);
+                peakTile(1340, 236, 'TORQUE', 'NM', n.torque, n.torquePeak, settings.get('maxTorque') || 650);
+            } else {
+                tile(1100, ty, 228, th);
+                cv.strokeRoundRect(1100, ty, 228, th, 12, 1.5, withAlpha(t.accent2 || t.accent, 0.45));
+                cv.text('MAP', 1120, ty + 32, 20, t.dim, { font: 'bold', spacing: 2 });
+                const nm = maps.map ? mapName(maps.map) : '';
+                if (nm) cv.text(nm.toUpperCase(), 1310, ty + 32, 18, t.accent2 || t.accent, { align: 'right', font: 'bold', spacing: 1 });
+                cv.text(maps.map ? String(maps.map) : '-', 1214, ty + th - 38, big, t.accent2 || t.accent, { align: 'center', font: 'num' });
+                cv.text('TAP TO CHANGE', 1214, ty + th - 8, 14, t.dim, { align: 'center', font: 'bold', spacing: 2 });
+                cv.target(1100, ty, 228, th, openMaps, 'mapTile');
+                tile(1340, ty, 236, th);
+                cv.text('FUEL', 1360, ty + 32, 20, t.dim, { font: 'bold', spacing: 2 });
+                // on the map number's baseline
+                cv.text(ethText(n.ethanol), 1458, ty + th - 38, big, GO, { align: 'center', font: 'num' });
+            }
 
             cylinders(cv, t, n, now, { top: ty + th, y1: R.y1 });
         }
@@ -298,7 +336,7 @@ mgu.run({
                 const v = G.isNum(r6) ? G.fmt(r6, 1) : '--', vw = cv.textWidth(v, fs, { font: 'num' }), vy = y + Math.round(ch / 2 + 29 * f);
                 cv.text(v, x + cw / 2 - 8, vy, fs, !G.isNum(r6) ? t.dim : l ? c : t.text, { align: 'center', font: 'num' });
                 if (G.isNum(r6)) cv.text('°', x + cw / 2 - 8 + vw / 2 + 2, vy - Math.round(20 * f), Math.round(26 * f), t.dim);
-                cv.text(mf > 0 ? 'MISFIRE ×' + mf : 'MAX RETARD', x + cw / 2, y + ch - 11, 15, mf > 0 ? t.crit : t.dim, { align: 'center', font: 'bold', spacing: 2 });
+                cv.text(mf > 0 ? 'MISFIRE ×' + mf : 'MAX RETARD', x + cw / 2, y + ch - 11, 15, mf > 0 ? (l ? c : t.text) : t.dim, { align: 'center', font: 'bold', spacing: 2 });
             }
         }
 
@@ -312,11 +350,11 @@ mgu.run({
                 cv.roundRect(x, y, cw, ch, 12, withAlpha(l ? c : '#ffffff', l ? 0.22 : 0.05));
                 if (l) cv.strokeRoundRect(x, y, cw, ch, 12, 2, withAlpha(c, 0.8));
                 cv.text('CYL ' + (i + 1), x + 14, y + 28, 18, t.dim, { font: 'bold', spacing: 1.5 });
-                cv.text(mf > 0 ? 'MF ' + mf : '', x + cw - 14, y + 28, 18, t.crit, { align: 'right', font: 'bold', spacing: 1 });
+                cv.text(mf > 0 ? 'MF ' + mf : '', x + cw - 14, y + 28, 18, l ? c : t.text, { align: 'right', font: 'bold', spacing: 1 });
                 const v = G.fmt(r6, 1), vw = cv.textWidth(v, fs, { font: 'num' }), vy = y + Math.round(ch / 2 + 31 * f);
                 cv.text(v, x + cw / 2 - 8, vy, fs, l ? c : t.text, { align: 'center', font: 'num' });
                 cv.text('°', x + cw / 2 - 8 + vw / 2 + 2, vy - Math.round(22 * f), Math.round(28 * f), t.dim);
-                cv.text(mf > 0 ? 'MISFIRE' : 'RETARD', x + cw / 2, y + ch - 12, 15, mf > 0 ? t.crit : t.dim, { align: 'center', font: 'bold', spacing: 2 });
+                cv.text(mf > 0 ? 'MISFIRE' : 'RETARD', x + cw / 2, y + ch - 12, 15, mf > 0 ? (l ? c : t.text) : t.dim, { align: 'center', font: 'bold', spacing: 2 });
             }
         }
 
@@ -367,7 +405,7 @@ mgu.run({
                     const l = cylLevel(k.max, k.mf), c = l ? levelColor(t, l) : t.dim, cx = cx0 + i * cylW;
                     if (l) cv.roundRect(cx - 6, y + 4, cylW - 10, rh - 8, 6, withAlpha(c, 0.16));
                     const w = cv.text(G.fmt(k.max, 1) + '°', cx, base, 22, l ? c : t.text, { font: 'bold' });
-                    cv.text('×' + k.n + (k.mf ? '  MF' + k.mf : ''), cx + w + 10, base, 18, k.mf ? t.crit : k.n ? c : t.dim, { font: 'bold' });
+                    cv.text('×' + k.n + (k.mf ? '  MF' + k.mf : ''), cx + w + 10, base, 18, k.mf ? (l ? c : t.text) : k.n ? c : t.dim, { font: 'bold' });
                 });
             });
         }
