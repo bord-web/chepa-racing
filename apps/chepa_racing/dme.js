@@ -27,7 +27,11 @@
  * range; without 4536, 4AB0 (none at its end).
  *
  * GROUPS are read on their own: each has its own request, pace and failures, so one that fails leaves the
- * others running. The link takes one request at a time, so a request gets ASK_MS at most, and a group that
+ * others running. Requests go by TURNS: half of them the boost (the dial follows it), a quarter the knock, the
+ * rest the pedal and the slow values; a turn whose group isn't due passes to the next. During a pull (pulling())
+ * PULL_TURNS: more of the knock, the misfire counters every second and read once more right after it, the
+ * temperatures only when the link has time left. The link takes one request
+ * at a time, so a request gets ASK_MS at most, and a group that
  * got no answer waits (HOLD_MS, doubling up to HOLD_MAX) while the others go on; when the DME answers again
  * they all go at once. A group whose several identifiers are refused in one request: each on its own (one
  * the DME hasn't got is found that way and left out for RETRY_MS once refused REFUSALS times in a row, a
@@ -40,6 +44,7 @@
  *   const dme = new Dme(ctx, () => !car.data().demo, () => eth._link());
  *   dme.values() -> { boost, target, iat, gearbox, pedal, pedalFrom, kr, angle[6], retard[6], misfire[6] } (bar / deg C / % / deg; null: none)
  *   dme.linked   -> the diagnostic link has been there (on a car, always; not in the emulator)
+ *   dme.pulling(on)  a pull is running or not (pulls.js)
  *   dme.state()  -> { multi, rate, absent: ['580F', ...], said, notes, groups: [{ name, age, misses, why }] }  (the Developer logs page)
  */
 const DME = 0x12;
@@ -52,7 +57,7 @@ const HOLD_MAX = 5000;
 const QUIET_AFTER = 10;
 const QUIET_MS = 2000;
 const OBD_IAT = 0x0F;                    // OBD-II PID: intake air, while the DME gives no 580F
-const OBD_AFTER = 2000;                  // 580F not read for this long: OBD alongside
+const OBD_AFTER = 10000;                 // 580F not read for this long: OBD alongside
 const OBD_EVERY = 500;
 const OBD_HOLD = 5000;                   // OBD didn't give it: asked again after this
 const OBD_STALE = 30000;
@@ -93,11 +98,14 @@ const GROUPS = [
     { name: 'boost', every: 100, stale: 2500, ids: [0x4205, 0x4536, 0x4AB0] },
     { name: 'knock', every: 100, stale: 2500, ids: [0x554C].concat(ANGLES) },
     { name: 'pedal', every: 200, stale: PEDAL_STALE, ids: PEDALS },
-    { name: 'intake', every: 500, stale: 30000, ids: [0x580F] },
-    { name: 'gearbox', every: 1000, stale: 30000, ids: [0x4650] },
-    { name: 'ambient', every: 1000, stale: 60000, ids: [0x4201] },
-    { name: 'misfire', every: 1000, stale: 10000, ids: MISFIRES },
+    { name: 'intake', every: 2000, stale: 30000, ids: [0x580F] },
+    { name: 'gearbox', every: 5000, stale: 30000, ids: [0x4650] },
+    { name: 'ambient', every: 10000, stale: 60000, ids: [0x4201] },
+    { name: 'misfire', every: 5000, pullEvery: 1000, stale: 20000, ids: MISFIRES },
 ];
+// whose turn each request is; 'slow': the most overdue of the groups not named here
+const TURNS = ['boost', 'knock', 'boost', 'pedal', 'boost', 'knock', 'boost', 'slow', 'boost', 'knock', 'boost', 'pedal'];
+const PULL_TURNS = ['boost', 'knock', 'boost', 'knock', 'boost', 'misfire', 'boost', 'knock', 'boost', 'knock', 'boost', 'pedal'];
 const STALE = {};
 GROUPS.forEach((g) => g.ids.forEach((d) => { STALE[d] = g.stale; }));
 const hex4 = (d) => ('000' + d.toString(16).toUpperCase()).slice(-4);
@@ -126,7 +134,9 @@ class Dme {
         this.refused = {};               // did -> refusals in a row
         this.groups = GROUPS.map((g) => Object.assign({ at: 0, hold: 0, misses: 0, why: '', okAt: 0, multi: null, multiFails: 0, multiAt: 0 }, g));
         this.missed = 0;                 // requests in a row without an answer, of any group
-        this.askedAt = 0;
+        this.askedAt = 0; this.asked = null;     // when the last request went, and its group
+        this.turn = 0;                   // the next of TURNS
+        this.pull = false;
         this.mfBase = new Array(CYL).fill(null);
         this.devSign = 1;                // 4536 = target - actual (1) or actual - target (-1)
         this.trim = null; this.trimT = 0; // each cylinder's own angle offset (deg), the reply it was last learnt from
@@ -171,18 +181,36 @@ class Dme {
         this.linked = true;
         const now = Date.now();
         if (this.missed >= QUIET_AFTER && now - this.askedAt < QUIET_MS) return QUIET_MS - (now - this.askedAt);
-        let g = null, due = Infinity;
-        this.groups.forEach((x) => {
-            const at = Math.max(x.at + x.every, x.hold);
-            if (at < due) { due = at; g = x; }
-        });
+        const { g, due, turn } = this.next(now);
         if (due > now) return Math.min(500, due - now);
-        g.at = now; this.askedAt = now;
+        g.at = now; this.askedAt = now; this.asked = g; this.turn = turn;
         await this.ask(link, g);
         if (g.name === 'intake') await this.askObd(link);
         if (g.name === 'pedal') await this.askObdPedal(link);
         if (now - this.rateT >= 2000) { this.rate = this.reads * 1000 / (now - this.rateT); this.reads = 0; this.rateT = now; }
         return 0;
+    }
+
+    /** A pull started or ended: its own turns while it runs; when it ends the misfire counters are read next. */
+    pulling(on) {
+        if (on === this.pull) return;
+        this.pull = on;
+        this.turn = on ? 0 : TURNS.indexOf('slow');
+        if (!on) this.groups.find((g) => g.name === 'misfire').at = 0;
+    }
+
+    /** The group to ask next, when it is due and the turn after it: the next turn with a group due, else the group due soonest. */
+    next(now) {
+        const turns = this.pull ? PULL_TURNS : TURNS;
+        const at = (x) => Math.max(x.at + (this.pull && x.pullEvery || x.every), x.hold);
+        const soonest = (list) => list.reduce((a, x) => (at(x) < at(a) ? x : a));
+        const of = (turn) => soonest(this.groups.filter((x) => (turn === 'slow' ? TURNS.indexOf(x.name) < 0 : x.name === turn)));
+        for (let i = 0; i < turns.length; i++) {
+            const k = (this.turn + i) % turns.length, g = of(turns[k]);
+            if (at(g) <= now) return { g, due: at(g), turn: (k + 1) % turns.length };
+        }
+        const g = soonest(this.groups);
+        return { g, due: at(g), turn: this.turn };
     }
 
     /** A reply, or null without one (why: this.why). */

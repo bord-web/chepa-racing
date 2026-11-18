@@ -9,7 +9,8 @@
  *
  *   const tune = new Tune(() => ({ maxBoost, maxTorque }));
  *   car.onSample((d, t) => tune.feed(d, t), () => tune.reset());
- *   tune.now   -> { oil, coolant, gearbox, iat, ethanol, boost, target, peak, rpm, speed, pedal, torque, power, retard[6], misfire[6] }
+ *   tune.now   -> { oil, coolant, gearbox, iat, ethanol, boost, target, peak, targetPeak, rpm, speed, pedal, torque, power, retard[6], misfire[6] }
+ *                 peak, targetPeak: the highest boost and target lately (PeakHold)
  *   tune.hist  -> [[t, boost, target, rpm], ...] at 10 Hz, the last 3 minutes
  */
 const CYL = 6;
@@ -17,6 +18,56 @@ const HIST_MS = 180000, HIST_STEP = 100;
 const PSI = 14.5038;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const isNum = (x) => typeof x === 'number' && isFinite(x);
+const HOLD_MS = 5000;                    // the peaks: how long a high stays once the driver stopped accelerating
+const HOLD_DROP = 20;                    // % of accelerator: this far back from its highest is no more accelerating
+const FALL_MS = 70;                      // the peaks' fall on the dial: its time constant
+
+/** Accelerating or not: stops when the pedal came HOLD_DROP back from its highest, starts when it went HOLD_DROP up from its lowest. */
+class Accelerating {
+    constructor() { this.on = false; this.p = null; }
+
+    feed(p) {
+        if (!isNum(p)) { this.p = null; this.on = false; return false; }
+        if (this.p === null) { this.p = p; this.on = p >= HOLD_DROP; return this.on; }
+        const moved = this.on ? this.p - p : p - this.p;
+        if (moved >= HOLD_DROP) { this.on = !this.on; this.p = p; } else if (moved < 0) this.p = p;
+        return this.on;
+    }
+}
+
+/**
+ * The highest value lately (0 at the least): follows the value up at once. HOLD_MS after the last new high, counted
+ * from the moment the driver stopped accelerating, it drops to the value now and holds that in turn.
+ */
+class PeakHold {
+    constructor() { this.v = null; this.t = 0; }
+
+    /** One sample: x, at t (ms), accelerating or not. Returns the value to show. */
+    feed(x, t, accelerating) {
+        if (accelerating) this.t = t;
+        const over = t - this.t >= HOLD_MS;
+        if (!isNum(x)) { if (over) this.v = null; return this.v; }
+        const c = Math.max(0, x);
+        if (this.v === null || c >= this.v || over) { this.v = c; this.t = t; }
+        return this.v;
+    }
+}
+
+/** A peak on the dial as it is drawn: up with the value at once, down to it quickly and smoothly (about 0.4 s). */
+class Falling {
+    constructor() { this.x = null; this.t = 0; }
+
+    feed(v, t) {
+        if (!isNum(v)) { this.x = null; return v; }
+        if (this.x === null || v >= this.x) this.x = v;
+        else {
+            this.x = v + (this.x - v) * Math.exp(-Math.max(0, t - this.t) / FALL_MS);
+            if (this.x - v < 0.005) this.x = v;
+        }
+        this.t = t;
+        return this.x;
+    }
+}
 
 class Tune {
     /** limits() -> { maxBoost (bar), maxTorque (Nm) }: the engine as tuned (settings). */
@@ -28,7 +79,8 @@ class Tune {
         this.iat = 24; this.gearbox = 32;
         this.retard = new Array(CYL).fill(0);
         this.misfire = new Array(CYL).fill(0);
-        this.peak = null;
+        this.accel = new Accelerating();
+        this.holdBoost = new PeakHold(); this.holdTarget = new PeakHold();
         this.hist = [];
         this.now = { retard: this.retard, misfire: this.misfire, ethanol: null };
     }
@@ -76,12 +128,12 @@ class Tune {
             boost = num(d.boost); target = num(d.target); iat = num(d.iat); gearbox = num(d.gearbox);
             retard = cyl(d.retard); misfire = cyl(d.misfire);
         }
-        if (boost > 0 && (this.peak === null || boost > this.peak)) this.peak = boost;
-
         // accelerator (0..100 %): the demo drive's throttle, or the pedal's real position; none without one
         const pedal = isNum(d.throttle) ? d.throttle * 100 : num(d.pedal);
+        const accelerating = this.accel.feed(pedal);
         this.now = {
-            rpm, load, pedal, speed: d.speed, boost, target, peak: this.peak,
+            rpm, load, pedal, speed: d.speed, boost, target,
+            peak: this.holdBoost.feed(boost, t, accelerating), targetPeak: this.holdTarget.feed(target, t, accelerating),
             torque, power: isNum(torque) && isNum(rpm) ? Math.max(0, torque * rpm / 7121) : null,   // mechanical hp
             oil: d.oil, coolant: d.coolant, iat, gearbox,
             // ethanol: the DME's (ethanol.js, d.ethanol) on the car; simulated only in the demo
@@ -120,7 +172,7 @@ class Tune {
         }
     }
 
-    resetCounters() { this.misfire.fill(0); this.peak = null; }
+    resetCounters() { this.misfire.fill(0); this.holdBoost = new PeakHold(); this.holdTarget = new PeakHold(); }
 }
 
 /**
@@ -153,4 +205,4 @@ function cylLevel(retard, misfire) {
     return 0;
 }
 
-module.exports = { Tune, units, cylLevel, ethText, CYL, isNum, clamp };
+module.exports = { Tune, PeakHold, Accelerating, Falling, HOLD_MS, units, cylLevel, ethText, CYL, isNum, clamp };

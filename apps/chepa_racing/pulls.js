@@ -8,11 +8,14 @@
  *   n    how often the DME pulled timing (the retard deepened by STEP deg or more since the last sample)
  *   max  the deepest retard (deg, <= 0)
  *   mf   misfires (growth of the engine unit's counter)
- * plus the pull's speed, rpm, peak boost, hottest intake air, map, ethanol and the engine's deepest mean
+ * plus the pull's speed, rpm, peak boost, highest boost target, hottest intake air, map, ethanol and the engine's deepest mean
  * retard (kr, deg, <= 0: the DME's own number).
  * The last pull stays on screen until the next one starts. Pulls of at least `minS` seconds go to the
  * log (the last KEEP, newest first, kept in dataDir/pulls.json); a shorter stab of the throttle is
  * dropped and the last logged pull comes back on screen.
+ *
+ * The misfire counters are read only now and then, so a logged pull still takes in what they show for TAIL_MS
+ * after it ended.
  *
  * The log switched off (opt.log false): no pull is caught and nothing is written; a pull in progress
  * is dropped.
@@ -25,7 +28,7 @@ const path = require('path');
 
 const CYL = 6, KEEP = 10;
 const STEP = 0.4;                 // deg: a deeper retard than the last sample by this much = one more knock event
-const START_MS = 300, END_MS = 700;
+const START_MS = 300, END_MS = 700, TAIL_MS = 1500;
 const isNum = (x) => typeof x === 'number' && isFinite(x);
 
 class Pulls {
@@ -35,6 +38,7 @@ class Pulls {
         this.list = [];
         try { const j = JSON.parse(fs.readFileSync(this.file, 'utf8')); if (Array.isArray(j)) this.list = j.slice(0, KEEP); } catch (e) { /* none yet */ }
         this.cur = null; this.above = 0; this.below = 0; this.prev = null; this.mf0 = null;
+        this.tail = null; this.t = 0;     // the pull just logged: { c, mf0, until (ms) }; the last sample's time
         this.shown = this.list[0] || null;
     }
 
@@ -42,6 +46,8 @@ class Pulls {
 
     /** One sample. t = ms; n = { pedal, rpm, speed, boost, iat, ethanol, map, retard[6], misfire[6] }; opt = { start (%), minS, log (default on) }. */
     feed(t, n, opt) {
+        this.t = t;
+        this._tail(t, n);
         if (opt.log === false) { if (this.cur || this.above) this.reset(); return; }
         if (!isNum(n.pedal) && !this.cur) { this.above = 0; return; }
         const p = isNum(n.pedal) ? n.pedal : 0;
@@ -59,10 +65,21 @@ class Pulls {
         } else this.below = 0;
     }
 
+    /** The pull just logged: misfires the counters show only now. */
+    _tail(t, n) {
+        const q = this.tail, m = n.misfire || [];
+        if (!q) return;
+        let grew = false;
+        q.c.cyl.forEach((k, i) => { if (isNum(m[i]) && m[i] - q.mf0[i] > k.mf) { k.mf = m[i] - q.mf0[i]; grew = true; } });
+        if (grew) this._save();
+        if (t >= q.until) this.tail = null;
+    }
+
     _begin(t, n) {
         const r = n.retard || [], m = n.misfire || [];
+        this.tail = null;
         this.cur = {
-            start: t, end: t, v0: n.speed, v1: n.speed, rpm0: n.rpm, rpmMax: n.rpm, boost: n.boost, iat: n.iat,
+            start: t, end: t, v0: n.speed, v1: n.speed, rpm0: n.rpm, rpmMax: n.rpm, boost: n.boost, target: n.target, iat: n.iat,
             map: n.map || null, eth: n.ethanol, kr: 0,
             cyl: Array.from({ length: CYL }, () => ({ n: 0, max: 0, mf: 0 })),
         };
@@ -82,6 +99,7 @@ class Pulls {
         if (isNum(n.speed)) c.v1 = n.speed;
         if (isNum(n.rpm) && !(n.rpm <= c.rpmMax)) c.rpmMax = n.rpm;
         if (isNum(n.boost) && !(n.boost <= c.boost)) c.boost = n.boost;
+        if (isNum(n.target) && !(n.target <= c.target)) c.target = n.target;
         if (isNum(n.iat) && !(n.iat <= c.iat)) c.iat = n.iat;
         if (isNum(n.kr) && n.kr < this.krFloor) c.kr = Math.min(c.kr, n.kr);
         for (let i = 0; i < CYL; i++) {
@@ -104,6 +122,7 @@ class Pulls {
             this.list.unshift(c);
             this.list.length = Math.min(this.list.length, KEEP);
             this.shown = c;
+            this.tail = { c, mf0: this.mf0, until: this.t + TAIL_MS };
             this._save();
             this.log.info('pull: ' + s.toFixed(1) + ' s logged, knock events ' + c.cyl.map((x) => x.n).join('/'));
         } else {
@@ -117,7 +136,7 @@ class Pulls {
     clear() { this.list = []; this.shown = this.cur; this._save(); }
 
     /** Start over (the car's data source changed, the log switched off): a pull in progress is dropped. */
-    reset() { this.cur = null; this.above = 0; this.below = 0; this.shown = this.list[0] || null; }
+    reset() { this.cur = null; this.above = 0; this.below = 0; this.tail = null; this.shown = this.list[0] || null; }
 }
 
 module.exports = { Pulls, KEEP };

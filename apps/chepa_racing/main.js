@@ -26,7 +26,7 @@ const mgu = require('./kit/mgu');
 const { withAlpha } = require('./kit/canvas');
 const G = require('./kit/gauges');
 const Car = require('./kit/car');
-const { Tune, units, cylLevel, ethText, CYL } = require('./tune');
+const { Tune, Falling, units, cylLevel, ethText, CYL } = require('./tune');
 const { MapControl, MAPS } = require('./maps');
 const { Pulls, KEEP } = require('./pulls');
 const { Tyres } = require('./tyres');
@@ -83,6 +83,7 @@ mgu.run({
             if (d.demo) tyres.step(d, t);
             // the log off: no pulls are caught at all (the tiles show live values)
             pulls.feed(t, Object.assign({ map: maps.map }, tune.now), { start: settings.get('pullStart') || 80, minS: settings.get('pullMin') || 2, log: logOn() });
+            dme.pulling(pulls.recording);
         }, () => { tune.reset(); pulls.reset(); });
         let page = Math.max(0, PAGES.indexOf(settings.get('page')));
         /** the pages in the header: Dev logs last, only with its setting on */
@@ -120,6 +121,7 @@ mgu.run({
                 }
             }, cv.textScale), Math.round(cx) - S, Math.round(cy) - S);
         }
+        const fallBoost = new Falling(), fallTarget = new Falling();     // the dial's peak lines as they are drawn
         const repaint = () => render();
         const openMaps = () => { onMaps = true; pick = null; return render(); };
 
@@ -181,16 +183,29 @@ mgu.run({
             cylinders(cv, t, n, now, { top: ty + th, y1: R.y1 });
         }
 
-        /** The boost dial up to the engine's max boost, the target as a marker on its rim (kept on the page: r <= cy - 70). */
+        /**
+         * The boost dial up to the engine's max boost, the target as a marker on its rim (kept on the page: r <= cy - 70).
+         * Two lines across the rim: the highest boost lately (blue) and the highest target lately (amber). They fall smoothly
+         * and stay on the rim at 0; where they meet each shows half of the line.
+         */
         function boostDial(cv, t, n, u, R) {
             const cx = 800, cy = Math.round((R.y0 + R.y1) / 2) + 5, r = Math.min(Math.round(214 * R.k), cy - 70), sc = dial(u);
-            // the arc and the target marker follow every sample; the numbers change at most every DIAL_HOLD ms
-            const b = u.P(n.boost), tg = u.P(n.target);
+            // the arc and the target marker follow every sample; the boost number changes at most every DIAL_HOLD ms
+            const b = u.P(n.boost), tg = u.P(n.target), at = Date.now(), peak = u.P(fallBoost.feed(n.peak, at)), tgPeak = u.P(fallTarget.feed(n.targetPeak, at));
             G.radial(cv, t, cx, cy, r, Object.assign({
-                value: b, readout: G.hold('d.b', b, DIAL_HOLD), decimals: u.pD, label: 'Boost', unit: u.pU, peak: u.P(n.peak), limit: u.maxBoost * 0.9,
+                value: b, readout: G.hold('d.b', b, DIAL_HOLD), decimals: u.pD, label: 'Boost', unit: u.pU, peak, showPeak: false, limit: u.maxBoost * 0.9,
                 zones: [{ from: u.maxBoost * 0.9, to: sc.max, color: 'crit', tintOnly: true }],
             }, sc));
             dialScale(cv, t, u, cx, cy, r);
+            const rimAngle = (v) => -135 + G.clamp((v - sc.min) / (sc.max - sc.min), 0, 1) * 270;
+            const rimLine = (v, c, half) => {
+                if (!G.isNum(v)) return;
+                const a = rimAngle(v) * Math.PI / 180, ro = r + 10, ri = half ? (r - Math.max(8, r * 0.11) + ro) / 2 : r - Math.max(8, r * 0.11);
+                cv.line(cx + Math.sin(a) * ri, cy - Math.cos(a) * ri, cx + Math.sin(a) * ro, cy - Math.cos(a) * ro, 3, c);
+            };
+            rimLine(tgPeak, t.warn);
+            rimLine(peak, t.accent2 || t.accent);
+            if (G.isNum(peak) && G.isNum(tgPeak) && Math.abs(rimAngle(peak) - rimAngle(tgPeak)) < 1.5) rimLine(tgPeak, t.warn, true);
             if (G.isNum(tg)) {
                 const a = (-135 + G.clamp((tg - sc.min) / (sc.max - sc.min), 0, 1) * 270) * Math.PI / 180;
                 const p = (rr) => [cx + Math.sin(a) * rr, cy - Math.cos(a) * rr];
@@ -198,7 +213,9 @@ mgu.run({
                 const nx = Math.cos(a) * s, ny = Math.sin(a) * s;
                 cv.quad([[ox - nx, oy - ny], [ox + nx, oy + ny], [tx, ty], [tx, ty]], c);
             }
-            cv.text('TARGET ' + G.fmt(G.hold('d.tg', tg, DIAL_HOLD), u.pD), cx, cy - Math.round(92 * r / 214), 26, t.accent2 || t.accent, { align: 'center', font: 'bold', spacing: 1.5 });
+            // the two lines' values: the peak over the number, in blue; the highest target under the dial's name, in amber
+            cv.text('PEAK ' + G.fmt(peak, u.pD), cx, cy - Math.round(92 * r / 214), 26, t.accent2 || t.accent, { align: 'center', font: 'bold', spacing: 1.5 });
+            cv.text('TARGET ' + G.fmt(tgPeak, u.pD), cx, cy + r * 0.82 + 32, 22, t.warn, { align: 'center', font: 'label', spacing: 1 });
         }
 
         /** The Chepa Racing CR shield, as big as the panel lets it (between the temperatures and the map tile). */
@@ -317,8 +334,8 @@ mgu.run({
             G.button(cv, t, 1176, 50, 200, 44, on ? 'Log: on' : 'Log: off', () => { settings.set('pullLog', !on); return render(); },
                 { key: 'logOnOff', color: on ? GO : t.warn, primary: !on });
             G.button(cv, t, 1396, 50, 180, 44, 'Clear log', () => { pulls.clear(); return render(); }, { key: 'clearLog', confirm: true, color: t.crit });
-            // columns: #, time, length, speed, peak boost, map, intake air, then cylinders 1-6
-            const cols = [['#', 40], ['Time', 116], ['Length', 86], ['Speed km/h', 150], ['Boost', 100], ['Map', 64], ['IAT', 80]];
+            // columns: #, time, length, speed, peak boost, highest target, map, intake air, then cylinders 1-6
+            const cols = [['#', 40], ['Time', 116], ['Length', 86], ['Speed km/h', 130], ['Boost', 84], ['Target', 84], ['Map', 56], ['IAT', 64]];
             const x0 = 32, cylW = (1576 - x0 - cols.reduce((a, c) => a + c[1], 0)) / CYL;
             const hy = 132, top = 146, rows = pulls.recording ? [pulls.cur].concat(pulls.list.slice(0, KEEP - 1)) : pulls.list.slice(0, KEEP);
             const rh = Math.min(42, (bottom - top) / KEEP);
@@ -341,7 +358,7 @@ mgu.run({
                     [rec ? 'REC' : String(r + (pulls.recording ? 0 : 1)), rec ? t.crit : t.dim],
                     [clock(p.start), t.text], [len, t.text],
                     [Math.round(p.v0 || 0) + ' – ' + Math.round(p.v1 || 0), t.text],
-                    [G.fmt(u.P(p.boost), u.pD), t.accent2 || t.accent], [p.map ? String(p.map) : '-', t.text],
+                    [G.fmt(u.P(p.boost), u.pD), t.accent2 || t.accent], [G.fmt(u.P(p.target), u.pD), t.warn], [p.map ? String(p.map) : '-', t.text],
                     [G.fmt(u.T(p.iat), 0) + '°', t.text],
                 ];
                 let xx = x0;
