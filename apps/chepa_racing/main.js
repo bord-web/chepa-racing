@@ -64,8 +64,8 @@ mgu.run({
         const pulls = new Pulls(ctx.dataDir, ctx.log);
         const tyres = new Tyres(ctx.log);
         tyres.watch(ctx);
-        // the accelerator pedal from the car (AcceleratorPedal.AngleAcceleratorPedal, 0.025 % a step), for when the
-        // DME's can't be read; it is sent when it changes, so its last value holds
+        // the emulator's accelerator slider (AcceleratorPedal.AngleAcceleratorPedal, 0.025 % a step). Never on a car:
+        // there this value jumps while the pedal moves, the pedal comes from the DME (dme.js)
         const pedal = { v: null };
         ctx.signals.watch(PEDAL_IF, '1', {
             AngleAcceleratorPedal: (v) => {
@@ -79,7 +79,7 @@ mgu.run({
         const dme = new Dme(ctx, () => !car.data().demo, () => eth._link());
         car.onSample((d, t) => {
             const dv = d.demo ? null : dme.values();
-            tune.feed(d.demo ? d : Object.assign({}, d, dv, { ethanol: eth.value, pedal: dv.pedal !== null ? dv.pedal : pedal.v }), t);
+            tune.feed(d.demo ? d : Object.assign({}, d, dv, { ethanol: eth.value, pedal: dv.pedal !== null || dme.linked ? dv.pedal : pedal.v }), t);
             if (d.demo) tyres.step(d, t);
             // the log off: no pulls are caught at all (the tiles show live values)
             pulls.feed(t, Object.assign({ map: maps.map }, tune.now), { start: settings.get('pullStart') || 80, minS: settings.get('pullMin') || 2, log: logOn() });
@@ -480,7 +480,7 @@ mgu.run({
                 ' °C, knock ' + f(dv.kr, 1) + '°, angles ' + dv.angle.map((a) => f(a, 1)).join(' '), 40, 186, 20,
                 G.isNum(dv.boost) ? GO : t.warn, { font: 'bold' });
             // each group of values on its own: how long ago it answered, or why it doesn't
-            cv.text('Pedal ' + f(n.pedal, 0) + ' %    Groups:  ' + ds.groups.map((g) => g.name + ' ' + (g.misses ? g.why + ' x' + g.misses : g.age === null ? '-' : (g.age / 1000).toFixed(1) + ' s')).join('  ·  '),
+            cv.text('Pedal ' + f(n.pedal, 0) + ' %' + (dv.pedalFrom ? ' (' + dv.pedalFrom + ')' : '') + '    Groups:  ' + ds.groups.map((g) => g.name + ' ' + (g.misses ? g.why + ' x' + g.misses : g.age === null ? '-' : (g.age / 1000).toFixed(1) + ' s')).join('  ·  '),
                 40, 216, 20, ds.groups.some((g) => g.misses) ? t.warn : t.dim, { font: 'bold' });
             // the replies: one row per request (ethanol.js PROBES), under them the last notes
             const cols = [['Request', 40], ['What', 190], ['Reply bytes', 560], ['Value', 1090]];

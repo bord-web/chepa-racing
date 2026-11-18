@@ -1,7 +1,7 @@
 {
   "id": "chepa_racing",
   "title": "Chepa Racing",
-  "description": "Chepa Racing tuner dashboard: temperatures, boost with target, ethanol, MHD map switching, knock and misfires per cylinder, boost vs target chart, tyres",  "version": "0.5.3",
+  "description": "Chepa Racing tuner dashboard: temperatures, boost with target, ethanol, MHD map switching, knock and misfires per cylinder, boost vs target chart, tyres",  "version": "0.5.4",
   "vendor": "custom",
   "loggingId": "OAB2",
   "iconGlyph": "CR",
@@ -9,7 +9,7 @@
     "de.bmw.infotainment.vehicle.CDS": { "statusEngineSpeed2": "rs", "statusEngineTemperature": "rs" },
     "de.bmw.infotainment.vehicle.Vehicle2": { "statusCarSpeed2": "rs" },
     "de.bmw.infotainment.drivingexcitement.FES": { "statusActualValueTorque2": "rs" },
-    "de.bmw.powertrain.AcceleratorPedal": { "_optional": "the accelerator pedal, for when the DME's can't be read", "AngleAcceleratorPedal": "s" },
+    "de.bmw.powertrain.AcceleratorPedal": { "_optional": "the emulator's accelerator slider; on a car the pedal comes from the DME", "AngleAcceleratorPedal": "s" },
     "de.bmw.infotainment.vehicle.TPMS": { "_optional": "tyre pressures and temperatures (the tyres panel on Vitals)",
       "statusTyreTemperature": "rs", "statusTyrePressure": "rs", "statusTargetTyrePressure": "rs" },
     "de.bmw.infotainment.vehicle.Vehicle": { "_optional": "the car's display units; tyre pressures / temperatures are then told by their values",

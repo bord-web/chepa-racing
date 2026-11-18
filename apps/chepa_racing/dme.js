@@ -12,7 +12,9 @@
  *   4A49 4A4A 4A4C 4A4D 4A4E 4A4F   ignition angle, cylinders 1-6 (0.1 deg CA)
  *   4B23 4B24 4B25 4B30 4B31 4B32   misfire counters, cylinders 1-6
  *   4650  gearbox oil temperature (0.75 - 48 deg C)
- *   5814  accelerator pedal, normalised (0.01220703 %); without it 480B, the same value
+ *   5814  accelerator pedal, normalised (0.01220703 %); without it 480B, the same value, then 5545 (0.025 %),
+ *         then OBD 01 5A (relative), 01 49 (its own %: 14.5 at rest, 82 flat out). The car's own pedal signal
+ *         (AcceleratorPedal) is no source: its value jumps while the pedal moves
  *
  * The DME gives no knock retard per cylinder, only their mean (554C), so that is the number to trust: while
  * it is 0 every cylinder's retard is 0, and otherwise the six always average to it. How it is shared out is an
@@ -36,7 +38,8 @@
  * car's own data, not the demo). Values older than their group's `stale` count as none.
  *
  *   const dme = new Dme(ctx, () => !car.data().demo, () => eth._link());
- *   dme.values() -> { boost, target, iat, gearbox, pedal, kr, angle[6], retard[6], misfire[6] } (bar / deg C / % / deg; null: none)
+ *   dme.values() -> { boost, target, iat, gearbox, pedal, pedalFrom, kr, angle[6], retard[6], misfire[6] } (bar / deg C / % / deg; null: none)
+ *   dme.linked   -> the diagnostic link has been there (on a car, always; not in the emulator)
  *   dme.state()  -> { multi, rate, absent: ['580F', ...], said, notes, groups: [{ name, age, misses, why }] }  (the Developer logs page)
  */
 const DME = 0x12;
@@ -62,7 +65,12 @@ const NOTES = 8;
 const CYL = 6;
 const ANGLES = [0x4A49, 0x4A4A, 0x4A4C, 0x4A4D, 0x4A4E, 0x4A4F];
 const MISFIRES = [0x4B23, 0x4B24, 0x4B25, 0x4B30, 0x4B31, 0x4B32];
-const PEDALS = [0x5814, 0x480B];
+const PEDALS = [0x5814, 0x480B, 0x5545];
+const PEDAL_STALE = 2000;
+const OBD_PEDALS = [
+    { pid: 0x5A, v: (x) => x / 2.55 },
+    { pid: 0x49, v: (x) => Math.max(0, Math.min(100, (x / 2.55 - 14.5) * 100 / (82 - 14.5))) },
+];
 // what each identifier's reply holds: data bytes and the value
 const u16 = (b) => (b[0] << 8) | b[1];
 const s16 = (b) => (u16(b) >= 0x8000 ? u16(b) - 0x10000 : u16(b));
@@ -77,13 +85,14 @@ const DIDS = {
 };
 ANGLES.forEach((d) => { DIDS[d] = { len: 2, v: (b) => s16(b) * 0.1 }; });
 MISFIRES.forEach((d) => { DIDS[d] = { len: 2, v: u16 }; });
-PEDALS.forEach((d) => { DIDS[d] = { len: 2, v: (b) => s16(b) * 0.01220703 }; });
+[0x5814, 0x480B].forEach((d) => { DIDS[d] = { len: 2, v: (b) => s16(b) * 0.01220703 }; });
+DIDS[0x5545] = { len: 2, v: (b) => u16(b) * 0.025 };
 // what belongs to one moment stays in one request (boost and its deviation; the cylinders' knock); what changes
 // slowly is read slowly and stays on screen through a gap
 const GROUPS = [
     { name: 'boost', every: 100, stale: 2500, ids: [0x4205, 0x4536, 0x4AB0] },
     { name: 'knock', every: 100, stale: 2500, ids: [0x554C].concat(ANGLES) },
-    { name: 'pedal', every: 200, stale: 1000, ids: PEDALS },
+    { name: 'pedal', every: 200, stale: PEDAL_STALE, ids: PEDALS },
     { name: 'intake', every: 500, stale: 30000, ids: [0x580F] },
     { name: 'gearbox', every: 1000, stale: 30000, ids: [0x4650] },
     { name: 'ambient', every: 1000, stale: 60000, ids: [0x4201] },
@@ -122,6 +131,8 @@ class Dme {
         this.devSign = 1;                // 4536 = target - actual (1) or actual - target (-1)
         this.trim = null; this.trimT = 0; // each cylinder's own angle offset (deg), the reply it was last learnt from
         this.obd = null; this.obdAt = 0; // intake air from OBD: { v, t }, not asked before (ms)
+        this.obdPedal = null; this.obdPedalAt = 0; this.obdPedalI = 0;   // the pedal from OBD: { v, t, from }, the PID to ask
+        this.linked = false;
         this.reads = 0; this.rateT = Date.now(); this.rate = 0;
         this.said = ''; this.notes = [];
         this.stopped = false;
@@ -157,6 +168,7 @@ class Dme {
         if (!this.live()) return 500;
         const link = await this.link();
         if (!link.available) { this.note('waiting for the diagnostic link'); return 1000; }
+        this.linked = true;
         const now = Date.now();
         if (this.missed >= QUIET_AFTER && now - this.askedAt < QUIET_MS) return QUIET_MS - (now - this.askedAt);
         let g = null, due = Infinity;
@@ -168,6 +180,7 @@ class Dme {
         g.at = now; this.askedAt = now;
         await this.ask(link, g);
         if (g.name === 'intake') await this.askObd(link);
+        if (g.name === 'pedal') await this.askObdPedal(link);
         if (now - this.rateT >= 2000) { this.rate = this.reads * 1000 / (now - this.rateT); this.reads = 0; this.rateT = now; }
         return 0;
     }
@@ -218,12 +231,29 @@ class Dme {
         const now = Date.now();
         if (this.intake(now, OBD_AFTER) !== null || now < this.obdAt) return;
         this.obdAt = now + OBD_EVERY;
-        let u = null;
-        try {
-            u = await link.physical(DME, 0x01, [OBD_IAT], ASK_MS, (r) => (r[0] === 0x41 && r[1] === OBD_IAT) || (r[0] === 0x7F && r[1] === 0x01));
-        } catch (e) { /* as no answer */ }
-        if (u && u[0] === 0x41 && u.length >= 3) this.obd = { v: u[2] - 40, t: Date.now() };
+        const x = await this.obdByte(link, OBD_IAT);
+        if (x !== null) this.obd = { v: x - 40, t: Date.now() };
         else this.obdAt = Date.now() + OBD_HOLD;
+    }
+
+    /** The pedal from OBD, while the DME gives none of PEDALS: the first PID that answers. */
+    async askObdPedal(link) {
+        const now = Date.now();
+        if (now < this.obdPedalAt || PEDALS.some((d) => this.get(d, now))) return;
+        const o = OBD_PEDALS[this.obdPedalI];
+        this.obdPedalAt = now + OBD_EVERY;
+        const x = await this.obdByte(link, o.pid);
+        if (x !== null) { this.obdPedal = { v: o.v(x), t: Date.now(), from: 'OBD ' + o.pid.toString(16).toUpperCase() }; return; }
+        this.obdPedalI = (this.obdPedalI + 1) % OBD_PEDALS.length;
+        if (!this.obdPedalI) this.obdPedalAt = Date.now() + OBD_HOLD;
+    }
+
+    /** One OBD-II PID's first data byte, or null. */
+    async obdByte(link, pid) {
+        try {
+            const u = await link.physical(DME, 0x01, [pid], ASK_MS, (r) => (r[0] === 0x41 && r[1] === pid) || (r[0] === 0x7F && r[1] === 0x01));
+            return u && u[0] === 0x41 && u[1] === pid && u.length >= 3 ? u[2] : null;
+        } catch (e) { return null; }
     }
 
     /** Each identifier in a request of its own, until one gets no answer; true when every one answered. */
@@ -297,9 +327,11 @@ class Dme {
         const goal = p !== null && dev !== null ? p + this.devSign * dev : s;
         // intake air: 580F just read, else OBD, else the last 580F while it counts
         const fresh = this.intake(now, OBD_AFTER), obd = this.obd && now - this.obd.t < OBD_STALE ? this.obd.v : null;
-        const pedal = PEDALS.map(v).find((x) => x !== null && x >= -2 && x <= 102);
+        const did = PEDALS.find((d) => { const x = v(d); return x !== null && x >= -2 && x <= 102; });
+        const op = this.obdPedal && now - this.obdPedal.t < PEDAL_STALE ? this.obdPedal : null;
         const out = {
-            pedal: pedal === undefined ? null : Math.max(0, Math.min(100, pedal)),
+            pedal: did !== undefined ? Math.max(0, Math.min(100, v(did))) : op ? op.v : null,
+            pedalFrom: did !== undefined ? hex4(did) : op ? op.from : null,
             boost: amb !== null && p !== null ? (p - amb) / 1000 : null,
             target: amb !== null && goal !== null ? (goal - amb) / 1000 : null,
             iat: fresh !== null ? fresh : obd !== null ? obd : this.intake(now, STALE[0x580F]),
