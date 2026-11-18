@@ -82,7 +82,7 @@ mgu.run({
             tune.feed(d.demo ? d : Object.assign({}, d, dv, { ethanol: eth.value, pedal: dv.pedal !== null || dme.linked ? dv.pedal : pedal.v }), t);
             if (d.demo) tyres.step(d, t);
             // the log off: no pulls are caught at all (the tiles show live values)
-            pulls.feed(t, Object.assign({ map: maps.map }, tune.now), { start: settings.get('pullStart') || 80, minS: settings.get('pullMin') || 2, log: logOn() });
+            pulls.feed(t, Object.assign({ map: maps.map }, tune.now), { start: settings.get('pullStart') || 50, minS: settings.get('pullMin') || 1, log: logOn() });
             dme.pulling(pulls.recording);
         }, () => { tune.reset(); pulls.reset(); });
         let page = Math.max(0, PAGES.indexOf(settings.get('page')));
@@ -328,7 +328,7 @@ mgu.run({
             const bottom = G.pageBottom(cv) - 8;
             const on = logOn();
             cv.text('PULL LOG', 40, 80, 22, t.dim, { font: 'bold', spacing: 2.5 });
-            if (on) cv.text('last ' + KEEP + ' pulls · a pull starts at ' + (settings.get('pullStart') || 80) + '% accelerator · newest on top', 190, 80, 20, t.dim);
+            if (on) cv.text('last ' + KEEP + ' pulls · a pull starts at ' + (settings.get('pullStart') || 50) + '% accelerator · newest on top', 190, 80, 20, t.dim);
             else cv.text('LOGGING IS OFF · new pulls are not recorded', 190, 80, 20, t.warn, { font: 'bold', spacing: 1 });
             // on / off: the same as the setting "Pull log: record pulls"
             G.button(cv, t, 1176, 50, 200, 44, on ? 'Log: on' : 'Log: off', () => { settings.set('pullLog', !on); return render(); },
@@ -345,7 +345,7 @@ mgu.run({
             for (let i = 0; i < CYL; i++) cv.text('CYL ' + (i + 1), cx0 + i * cylW, hy, 15, t.dim, { font: 'bold', spacing: 1.5 });
             cv.fillRect(x0 - 8, top - 4, 1576 - x0 + 8, 1, withAlpha('#ffffff', 0.2));
             if (!rows.length) {
-                cv.text(on ? 'No pulls yet. Press the accelerator past ' + (settings.get('pullStart') || 80) + '% for a pull; the knock retard of each one is kept here.'
+                cv.text(on ? 'No pulls yet. Press the accelerator past ' + (settings.get('pullStart') || 50) + '% for a pull; the knock retard of each one is kept here.'
                     : 'No pulls logged. The log is off: tap "Log: off" to record pulls again.', 40, top + 60, 24, t.dim);
                 return;
             }

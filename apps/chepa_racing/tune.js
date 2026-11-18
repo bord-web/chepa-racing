@@ -18,7 +18,7 @@ const HIST_MS = 180000, HIST_STEP = 100;
 const PSI = 14.5038;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const isNum = (x) => typeof x === 'number' && isFinite(x);
-const HOLD_MS = 5000;                    // the peaks: how long a high stays once the pedal came back
+const HOLD_MS = 10000;                   // the peaks: how long a high stays once the pedal came back
 const HOLD_DROP = 20;                    // % of accelerator: this far back from where it was at the peak starts the count
 const FALL_MS = 70;                      // the peaks' fall on the dial: its time constant
 
