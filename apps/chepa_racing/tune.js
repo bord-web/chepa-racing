@@ -87,6 +87,8 @@ class Tune {
             // ethanol: the DME's (ethanol.js, d.ethanol) on the car; simulated only in the demo
             ethanol: d.demo ? 37 + 0.4 * Math.sin(t / 200000) : num(d.ethanol),
             retard, misfire, demo: d.demo,
+            // the engine's mean knock retard (deg, 0 or less): the DME's own number on the car
+            kr: d.demo ? retard.reduce((a, b) => a + b, 0) / CYL : num(d.kr),
         };
         if (t - this.lastHist >= HIST_STEP) {
             this.lastHist = t;

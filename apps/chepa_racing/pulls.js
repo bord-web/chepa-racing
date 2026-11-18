@@ -8,7 +8,8 @@
  *   n    how often the DME pulled timing (the retard deepened by STEP deg or more since the last sample)
  *   max  the deepest retard (deg, <= 0)
  *   mf   misfires (growth of the engine unit's counter)
- * plus the pull's speed, rpm, peak boost, hottest intake air, map and ethanol.
+ * plus the pull's speed, rpm, peak boost, hottest intake air, map, ethanol and the engine's deepest mean
+ * retard (kr, deg, <= 0: the DME's own number).
  * The last pull stays on screen until the next one starts. Pulls of at least `minS` seconds go to the
  * log (the last KEEP, newest first, kept in dataDir/pulls.json); a shorter stab of the throttle is
  * dropped and the last logged pull comes back on screen.
@@ -62,12 +63,13 @@ class Pulls {
         const r = n.retard || [], m = n.misfire || [];
         this.cur = {
             start: t, end: t, v0: n.speed, v1: n.speed, rpm0: n.rpm, rpmMax: n.rpm, boost: n.boost, iat: n.iat,
-            map: n.map || null, eth: n.ethanol,
+            map: n.map || null, eth: n.ethanol, kr: 0,
             cyl: Array.from({ length: CYL }, () => ({ n: 0, max: 0, mf: 0 })),
         };
         this.prev = Array.from({ length: CYL }, (_, i) => (isNum(r[i]) ? r[i] : 0));
         // retard still left from before the pull (it recovers over a few seconds) is not this pull's
         this.floor = this.prev.slice();
+        this.krFloor = isNum(n.kr) ? n.kr : 0;
         this.mf0 = Array.from({ length: CYL }, (_, i) => (isNum(m[i]) ? m[i] : 0));
         this.below = 0;
         this.shown = this.cur;
@@ -81,6 +83,7 @@ class Pulls {
         if (isNum(n.rpm) && !(n.rpm <= c.rpmMax)) c.rpmMax = n.rpm;
         if (isNum(n.boost) && !(n.boost <= c.boost)) c.boost = n.boost;
         if (isNum(n.iat) && !(n.iat <= c.iat)) c.iat = n.iat;
+        if (isNum(n.kr) && n.kr < this.krFloor) c.kr = Math.min(c.kr, n.kr);
         for (let i = 0; i < CYL; i++) {
             const v = r[i];
             if (isNum(v)) {

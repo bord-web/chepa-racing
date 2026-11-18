@@ -13,10 +13,11 @@
  *   4B23 4B24 4B25 4B30 4B31 4B32   misfire counters, cylinders 1-6
  *   4650  gearbox oil temperature (0.75 - 48 deg C)
  *
- * The DME gives no knock retard per cylinder, only their mean. Each cylinder's: the cylinders share one
- * base angle, so angle(i) = base - retard(i), and mean(retard) is 554C: retard(i) = mean(angle) + 554C -
- * angle(i) (from one reply, or within KNOCK_SPAN one a request). Under DEADBAND it counts as none (the
- * angles' own spread).
+ * The DME gives no knock retard per cylinder, only their mean (554C), so that is the number to trust: while
+ * it is 0 every cylinder's retard is 0, and otherwise the six always average to it. How it is shared out is an
+ * estimate from the angles (of one reply, or within KNOCK_SPAN one a request): angle(i) = base + trim(i) -
+ * retard(i), so retard(i) = mean(angle) + 554C + trim(i) - angle(i). trim(i), a cylinder's own offset, is learnt
+ * while the DME takes nothing. Without the angles each cylinder shows the mean.
  * Misfires: what each counter grew since the app first read it (a counter that went back started over).
  * The target: 4AB0 ends at 2560 hPa, so from the deviation of the same reply. Which way round the DME
  * counts it (target - actual, the usual, or actual - target) is learnt from 4AB0 while that is in its
@@ -54,7 +55,8 @@ const OBD_STALE = 30000;
 const MULTI_FAILS = 3;
 const MULTI_RETRY_MS = 30000;
 const KNOCK_SPAN = 1000;                 // ms: the angles and the mean retard count as one moment within this
-const DEADBAND = 0.2;                    // deg: less retard than this counts as none
+const KNOCK_NONE = 0.1;                  // deg: a mean retard under this is none (554C's step is 0.375)
+const TRIM_RATE = 0.05;                  // how fast a cylinder's own offset follows, per reply
 const NOTES = 8;
 const CYL = 6;
 const ANGLES = [0x4A49, 0x4A4A, 0x4A4C, 0x4A4D, 0x4A4E, 0x4A4F];
@@ -114,6 +116,7 @@ class Dme {
         this.askedAt = 0;
         this.mfBase = new Array(CYL).fill(null);
         this.devSign = 1;                // 4536 = target - actual (1) or actual - target (-1)
+        this.trim = null; this.trimT = 0; // each cylinder's own angle offset (deg), the reply it was last learnt from
         this.obd = null; this.obdAt = 0; // intake air from OBD: { v, t }, not asked before (ms)
         this.reads = 0; this.rateT = Date.now(); this.rate = 0;
         this.said = ''; this.notes = [];
@@ -260,6 +263,24 @@ class Dme {
         return r && now - r.t < age && r.v >= -45 ? r.v : null;
     }
 
+    /** Each cylinder's retard (deg, 0 or less) from the DME's mean retard kr (read at t) and the angles `as`. */
+    shares(kr, t, as) {
+        const one = as.every((a) => a && Math.abs(a.t - t) <= KNOCK_SPAN);
+        const mean = one ? as.reduce((x, a) => x + a.v, 0) / CYL : 0;
+        const deg = (r) => { const x = Math.round(r * 10) / 10; return x ? -x : 0; };
+        if (kr < KNOCK_NONE) {
+            if (one && t !== this.trimT) {
+                this.trimT = t;
+                this.trim = as.map((a, i) => { const d = a.v - mean; return this.trim ? this.trim[i] + (d - this.trim[i]) * TRIM_RATE : d; });
+            }
+            return new Array(CYL).fill(0);
+        }
+        if (!one) return new Array(CYL).fill(deg(kr));
+        const r = as.map((a, i) => Math.max(0, mean + kr + (this.trim ? this.trim[i] : 0) - a.v));
+        const sum = r.reduce((x, y) => x + y, 0);
+        return r.map((x) => deg(sum > 0 ? x * CYL * kr / sum : kr));
+    }
+
     values() {
         const now = Date.now(), v = (d) => { const r = this.get(d, now); return r ? r.v : null; };
         const temp = (d) => { const c = v(d); return c !== null && c >= -45 ? c : null; };
@@ -279,12 +300,10 @@ class Dme {
             gearbox: temp(0x4650),
             kr: null, angle: ANGLES.map(v), retard: new Array(CYL).fill(null), misfire: new Array(CYL).fill(null),
         };
-        // each cylinder's retard: from the angles and the mean retard of one moment
-        const kr = this.get(0x554C, now), as = ANGLES.map((d) => this.get(d, now));
-        if (kr) out.kr = -Math.abs(kr.v);
-        if (kr && as.every((a) => a && Math.abs(a.t - kr.t) <= KNOCK_SPAN)) {
-            const mean = as.reduce((x, a) => x + a.v, 0) / CYL;
-            out.retard = as.map((a) => { const r = mean + Math.abs(kr.v) - a.v; return r < DEADBAND ? 0 : -Math.round(r * 10) / 10; });
+        const kr = this.get(0x554C, now);
+        if (kr) {
+            out.kr = kr.v ? -Math.abs(kr.v) : 0;
+            out.retard = this.shares(Math.abs(kr.v), kr.t, ANGLES.map((d) => this.get(d, now)));
         }
         MISFIRES.forEach((d, i) => { const c = v(d); if (c !== null) out.misfire[i] = c - this.mfBase[i]; });
         return out;

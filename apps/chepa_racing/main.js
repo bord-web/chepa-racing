@@ -268,6 +268,8 @@ mgu.run({
             const cap = rec ? 'RECORDING PULL · ' + s : p ? 'LAST PULL · ' + s + ' · ' + clock(p.start) : 'LAST PULL · NONE YET';
             const cc = rec ? (Math.floor(now / 400) % 2 ? t.crit : withAlpha(t.crit, 0.55)) : t.dim;
             cv.text(cap, gx + 4, gy - 10, 16, cc, { font: 'bold', spacing: 1.5 });
+            // the engine's deepest mean retard of the pull: the DME's own number (the tiles share it out)
+            if (p && G.isNum(p.kr)) cv.text('DME ' + G.fmt(p.kr, 1) + '°', gx + 3 * cw + 16, gy - 10, 16, p.kr < 0 ? t.warn : t.dim, { align: 'right', font: 'bold', spacing: 1.5 });
             for (let i = 0; i < CYL; i++) {
                 const x = gx + (i % 3) * (cw + 10), y = gy + Math.floor(i / 3) * (ch + 10);
                 const k = p ? p.cyl[i] : null, r6 = k ? k.max : null, mf = k ? k.mf : 0;
