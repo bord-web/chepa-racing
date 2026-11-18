@@ -78,8 +78,8 @@ class Tune {
         }
         if (boost > 0 && (this.peak === null || boost > this.peak)) this.peak = boost;
 
-        // accelerator (0..100 %): the demo drive's throttle, a pedal value when the car gives one, else engine load
-        const pedal = isNum(d.throttle) ? d.throttle * 100 : isNum(d.pedal) ? d.pedal : torque === null ? null : load * 100;
+        // accelerator (0..100 %): the demo drive's throttle, or the pedal's real position; none without one
+        const pedal = isNum(d.throttle) ? d.throttle * 100 : num(d.pedal);
         this.now = {
             rpm, load, pedal, speed: d.speed, boost, target, peak: this.peak,
             torque, power: isNum(torque) && isNum(rpm) ? Math.max(0, torque * rpm / 7121) : null,   // mechanical hp
@@ -125,21 +125,20 @@ class Tune {
 
 /**
  * Display units from the settings: temperatures (C / F), boost (bar / psi) and the boost scale:
- * from its start (setting, e.g. -0.2 bar) up to the engine's maximum boost (setting), rounded up
- * to a whole scale step. Below the start (vacuum) the dial rests at its start; the number still
- * shows the real value.
+ * from 0 up to the engine's maximum boost (setting), rounded up to a half bar (5 psi). Below 0 the
+ * dial rests at its start; the number still shows the real value. A scale over 4 bar (60 psi) has its
+ * numbers every 1 bar (10 psi), so they keep their room on the dial and the chart, which then starts at 0.
  */
 function units(settings) {
     const F = settings.get('tempUnit') === 'f', psi = settings.get('pressUnit') === 'psi';
     const maxBar = settings.get('maxBoost') || 2.0;
-    const minBar = isNum(settings.get('minBoost')) ? settings.get('minBoost') : -0.2;
-    const k = psi ? PSI : 1, step = psi ? 5 : 0.5;
-    const min = Math.round(minBar * k * 10) / 10;
-    const max = Math.max(min + 2 * step, Math.ceil(maxBar * k / step - 1e-9) * step);
+    const k = psi ? PSI : 1, fine = psi ? 5 : 0.5;
+    const max = Math.max(2 * fine, Math.ceil(maxBar * k / fine - 1e-9) * fine);
+    const wide = max > (psi ? 60 : 4), step = wide ? 2 * fine : fine;
     return {
         T: (c) => (isNum(c) ? (F ? c * 9 / 5 + 32 : c) : null), tU: F ? '°F' : '°C',
         P: (b) => (isNum(b) ? b * k : null), pU: psi ? 'psi' : 'bar', pD: psi ? 1 : 2,
-        pMin: min, pMax: max, pStep: step, chartMin: Math.floor(min / step - 1e-9) * step,
+        pMin: 0, pMax: max, pStep: step, chartMin: wide ? 0 : -step,
         maxBoost: maxBar * k, psi,
     };
 }

@@ -42,7 +42,6 @@ const PAGES = ['vitals', 'boost', 'log'];
 const TAB_NAMES = { vitals: 'Vitals', boost: 'Boost', log: 'Log', dev: 'Dev logs' };
 const PROBE_MS = 5000;                   // Dev logs: the DME asked again this often while the page is open
 const PEDAL_IF = 'de.bmw.powertrain.AcceleratorPedal';
-const PEDAL_MS = 1000;                   // a pedal value older than this counts as none
 const GO = '#2fd27a';
 const CONFIRM_MS = 5000;
 const DIAL_HOLD = 333;                   // the boost dial's numbers: 3 a second, the car's samples come at 20 Hz
@@ -65,12 +64,13 @@ mgu.run({
         const pulls = new Pulls(ctx.dataDir, ctx.log);
         const tyres = new Tyres(ctx.log);
         tyres.watch(ctx);
-        // the accelerator pedal from the car (AcceleratorPedal.AngleAcceleratorPedal, 0.025 % a step), when it sends it
-        const pedal = { v: null, t: 0 };
+        // the accelerator pedal from the car (AcceleratorPedal.AngleAcceleratorPedal, 0.025 % a step), for when the
+        // DME's can't be read; it is sent when it changes, so its last value holds
+        const pedal = { v: null };
         ctx.signals.watch(PEDAL_IF, '1', {
             AngleAcceleratorPedal: (v) => {
                 const raw = v && v.actualValueAngleAcceleratorPedal, p = typeof raw === 'number' ? raw * 0.025 : null;
-                if (p !== null && p >= -2 && p <= 102) { pedal.v = G.clamp(p, 0, 100); pedal.t = Date.now(); }
+                if (p !== null && p >= -2 && p <= 102) pedal.v = G.clamp(p, 0, 100);
             },
         }, ctx.log).then((s) => ctx.log.info('signal AcceleratorPedal ' + (s && s.error ? 'error: ' + s.error : 'subscribed'))).catch(() => {});
         // the fuel's ethanol content from the DME (ethanol.js), on the car only
@@ -78,8 +78,8 @@ mgu.run({
         // boost, target, intake air, gearbox oil, knock retard and misfires from the DME (dme.js), over the same link
         const dme = new Dme(ctx, () => !car.data().demo, () => eth._link());
         car.onSample((d, t) => {
-            const live = !d.demo && pedal.v !== null && Date.now() - pedal.t < PEDAL_MS;
-            tune.feed(d.demo ? d : Object.assign({}, d, dme.values(), { ethanol: eth.value }, live ? { pedal: pedal.v } : null), t);
+            const dv = d.demo ? null : dme.values();
+            tune.feed(d.demo ? d : Object.assign({}, d, dv, { ethanol: eth.value, pedal: dv.pedal !== null ? dv.pedal : pedal.v }), t);
             if (d.demo) tyres.step(d, t);
             // the log off: no pulls are caught at all (the tiles show live values)
             pulls.feed(t, Object.assign({ map: maps.map }, tune.now), { start: settings.get('pullStart') || 80, minS: settings.get('pullMin') || 2, log: logOn() });
@@ -101,7 +101,7 @@ mgu.run({
         /** 0 blue, 1 green, 2 yellow, 3 red; null without a value. */
         const band = (c, l) => (!G.isNum(c) ? null : c >= l.crit ? 3 : c >= l.warn ? 2 : c < l.cold ? 0 : 1);
         const bandColor = (t, b) => [t.cold, GO, t.warn, t.crit][b];
-        // the dial's own end ticks only: its scale (ticks on round values from a start like -0.2) is drawn below
+        // the dial's own end ticks only: its scale (ticks on round values from 0) is drawn below
         const dial = (u) => ({ min: u.pMin, max: u.pMax, ticks: 1, majorEvery: 1, tickLabels: false });
         /** Boost scale on the dial: a tick every half step, numbers on whole steps (0, 0.5 ... bar; 0, 5 ... psi). Cached. */
         function dialScale(cv, t, u, cx, cy, r) {
@@ -387,6 +387,7 @@ mgu.run({
             const xs = (h) => (h[0] - now) / 1000;
             G.chart(cv, t, 24, 156, 1552, bottom - 156 - 132, {
                 xMin: -win, xMax: 0, yMin: u.chartMin, yMax: u.pMax, yStep: u.pStep, yUnit: u.pU, xFmt: () => '', padBottom: 8,
+                yFmt: (v) => (v >= u.pMax - 1e-9 ? '' : G.fmt(v, u.pStep % 1 ? 1 : 0)),          // the top of the scale: the unit's place
                 marks: [{ y: 0, color: t.tick }, { y: u.maxBoost, color: 'crit', label: 'MAX ' + G.fmt(u.maxBoost, u.psi ? 0 : 2) }],
                 series: [
                     { pts: pts.map((h) => [xs(h), u.P(h[1])]), color: act, width: 4, fill: 0.22 },
@@ -479,7 +480,7 @@ mgu.run({
                 ' °C, knock ' + f(dv.kr, 1) + '°, angles ' + dv.angle.map((a) => f(a, 1)).join(' '), 40, 186, 20,
                 G.isNum(dv.boost) ? GO : t.warn, { font: 'bold' });
             // each group of values on its own: how long ago it answered, or why it doesn't
-            cv.text('Groups:  ' + ds.groups.map((g) => g.name + ' ' + (g.misses ? g.why + ' x' + g.misses : g.age === null ? '-' : (g.age / 1000).toFixed(1) + ' s')).join('  ·  '),
+            cv.text('Pedal ' + f(n.pedal, 0) + ' %    Groups:  ' + ds.groups.map((g) => g.name + ' ' + (g.misses ? g.why + ' x' + g.misses : g.age === null ? '-' : (g.age / 1000).toFixed(1) + ' s')).join('  ·  '),
                 40, 216, 20, ds.groups.some((g) => g.misses) ? t.warn : t.dim, { font: 'bold' });
             // the replies: one row per request (ethanol.js PROBES), under them the last notes
             const cols = [['Request', 40], ['What', 190], ['Reply bytes', 560], ['Value', 1090]];

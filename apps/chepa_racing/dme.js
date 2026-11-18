@@ -12,6 +12,7 @@
  *   4A49 4A4A 4A4C 4A4D 4A4E 4A4F   ignition angle, cylinders 1-6 (0.1 deg CA)
  *   4B23 4B24 4B25 4B30 4B31 4B32   misfire counters, cylinders 1-6
  *   4650  gearbox oil temperature (0.75 - 48 deg C)
+ *   5814  accelerator pedal, normalised (0.01220703 %); without it 480B, the same value
  *
  * The DME gives no knock retard per cylinder, only their mean (554C), so that is the number to trust: while
  * it is 0 every cylinder's retard is 0, and otherwise the six always average to it. How it is shared out is an
@@ -35,7 +36,7 @@
  * car's own data, not the demo). Values older than their group's `stale` count as none.
  *
  *   const dme = new Dme(ctx, () => !car.data().demo, () => eth._link());
- *   dme.values() -> { boost, target, iat, gearbox, kr, angle[6], retard[6], misfire[6] } (bar / deg C / deg; null: none)
+ *   dme.values() -> { boost, target, iat, gearbox, pedal, kr, angle[6], retard[6], misfire[6] } (bar / deg C / % / deg; null: none)
  *   dme.state()  -> { multi, rate, absent: ['580F', ...], said, notes, groups: [{ name, age, misses, why }] }  (the Developer logs page)
  */
 const DME = 0x12;
@@ -61,6 +62,7 @@ const NOTES = 8;
 const CYL = 6;
 const ANGLES = [0x4A49, 0x4A4A, 0x4A4C, 0x4A4D, 0x4A4E, 0x4A4F];
 const MISFIRES = [0x4B23, 0x4B24, 0x4B25, 0x4B30, 0x4B31, 0x4B32];
+const PEDALS = [0x5814, 0x480B];
 // what each identifier's reply holds: data bytes and the value
 const u16 = (b) => (b[0] << 8) | b[1];
 const s16 = (b) => (u16(b) >= 0x8000 ? u16(b) - 0x10000 : u16(b));
@@ -75,11 +77,13 @@ const DIDS = {
 };
 ANGLES.forEach((d) => { DIDS[d] = { len: 2, v: (b) => s16(b) * 0.1 }; });
 MISFIRES.forEach((d) => { DIDS[d] = { len: 2, v: u16 }; });
+PEDALS.forEach((d) => { DIDS[d] = { len: 2, v: (b) => s16(b) * 0.01220703 }; });
 // what belongs to one moment stays in one request (boost and its deviation; the cylinders' knock); what changes
 // slowly is read slowly and stays on screen through a gap
 const GROUPS = [
     { name: 'boost', every: 100, stale: 2500, ids: [0x4205, 0x4536, 0x4AB0] },
     { name: 'knock', every: 100, stale: 2500, ids: [0x554C].concat(ANGLES) },
+    { name: 'pedal', every: 200, stale: 1000, ids: PEDALS },
     { name: 'intake', every: 500, stale: 30000, ids: [0x580F] },
     { name: 'gearbox', every: 1000, stale: 30000, ids: [0x4650] },
     { name: 'ambient', every: 1000, stale: 60000, ids: [0x4201] },
@@ -293,7 +297,9 @@ class Dme {
         const goal = p !== null && dev !== null ? p + this.devSign * dev : s;
         // intake air: 580F just read, else OBD, else the last 580F while it counts
         const fresh = this.intake(now, OBD_AFTER), obd = this.obd && now - this.obd.t < OBD_STALE ? this.obd.v : null;
+        const pedal = PEDALS.map(v).find((x) => x !== null && x >= -2 && x <= 102);
         const out = {
+            pedal: pedal === undefined ? null : Math.max(0, Math.min(100, pedal)),
             boost: amb !== null && p !== null ? (p - amb) / 1000 : null,
             target: amb !== null && goal !== null ? (goal - amb) / 1000 : null,
             iat: fresh !== null ? fresh : obd !== null ? obd : this.intake(now, STALE[0x580F]),

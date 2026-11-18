@@ -17,8 +17,8 @@
  * The log switched off (opt.log false): no pull is caught and nothing is written; a pull in progress
  * is dropped.
  *
- * Accelerator: n.pedal (0..100): the demo drive's throttle; without a pedal signal, engine load
- * (torque against the engine's max torque).
+ * Accelerator: n.pedal (0..100), the pedal's real position (the demo drive's throttle). Without one no
+ * pull starts, and one in progress ends as if the pedal was released.
  */
 const fs = require('fs');
 const path = require('path');
@@ -43,8 +43,8 @@ class Pulls {
     /** One sample. t = ms; n = { pedal, rpm, speed, boost, iat, ethanol, map, retard[6], misfire[6] }; opt = { start (%), minS, log (default on) }. */
     feed(t, n, opt) {
         if (opt.log === false) { if (this.cur || this.above) this.reset(); return; }
-        const p = n.pedal;
-        if (!isNum(p)) return;
+        if (!isNum(n.pedal) && !this.cur) { this.above = 0; return; }
+        const p = isNum(n.pedal) ? n.pedal : 0;
         if (!this.cur) {
             if (p >= opt.start) {
                 if (!this.above) this.above = t;

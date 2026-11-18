@@ -1,7 +1,7 @@
 {
   "id": "chepa_racing",
   "title": "Chepa Racing",
-  "description": "Chepa Racing tuner dashboard: temperatures, boost with target, ethanol, MHD map switching, knock and misfires per cylinder, boost vs target chart, tyres",  "version": "0.5.2",
+  "description": "Chepa Racing tuner dashboard: temperatures, boost with target, ethanol, MHD map switching, knock and misfires per cylinder, boost vs target chart, tyres",  "version": "0.5.3",
   "vendor": "custom",
   "loggingId": "OAB2",
   "iconGlyph": "CR",
@@ -9,7 +9,7 @@
     "de.bmw.infotainment.vehicle.CDS": { "statusEngineSpeed2": "rs", "statusEngineTemperature": "rs" },
     "de.bmw.infotainment.vehicle.Vehicle2": { "statusCarSpeed2": "rs" },
     "de.bmw.infotainment.drivingexcitement.FES": { "statusActualValueTorque2": "rs" },
-    "de.bmw.powertrain.AcceleratorPedal": { "_optional": "the accelerator pedal: pulls are then told by engine load", "AngleAcceleratorPedal": "s" },
+    "de.bmw.powertrain.AcceleratorPedal": { "_optional": "the accelerator pedal, for when the DME's can't be read", "AngleAcceleratorPedal": "s" },
     "de.bmw.infotainment.vehicle.TPMS": { "_optional": "tyre pressures and temperatures (the tyres panel on Vitals)",
       "statusTyreTemperature": "rs", "statusTyrePressure": "rs", "statusTargetTyrePressure": "rs" },
     "de.bmw.infotainment.vehicle.Vehicle": { "_optional": "the car's display units; tyre pressures / temperatures are then told by their values",
@@ -48,10 +48,8 @@
     { "key": "map4Name", "label": "Map 4 name", "type": "choice", "default": "valet",
       "options": [["none", "-"], ["stock", "Stock"], ["valet", "Valet"], ["street", "Street"], ["s1", "Stage 1"], ["s2", "Stage 2"], ["s2p", "Stage 2+"], ["e30", "E30"], ["e40", "E40"], ["e50", "E50"], ["e85", "E85"], ["race", "Race"], ["track", "Track"]] },
 
-    { "key": "minBoost", "label": "Boost scale start", "type": "number", "unit": "bar", "default": -0.2,
-      "steps": [-1.0, -0.5, -0.3, -0.2, -0.1, 0] },
     { "key": "maxBoost", "label": "Engine max boost (end of the boost scale)", "type": "number", "unit": "bar", "default": 2.0, "reset": 1,
-      "steps": [1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 4.0] },
+      "steps": [1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0] },
     { "key": "maxTorque", "label": "Engine max torque", "type": "number", "unit": "Nm", "default": 650,
       "steps": [500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000, 1050, 1100, 1150, 1200, 1250, 1300, 1350, 1400] },
     { "key": "maxPower", "label": "Engine max power", "type": "number", "unit": "hp", "default": 503,
@@ -60,9 +58,9 @@
 
     { "key": "oilCold", "label": "Engine oil: blue below", "type": "number", "unit": "°C", "default": 50,
       "steps": [20, 30, 40, 50, 60, 70, 80] },
-    { "key": "oilWarn", "label": "Engine oil: yellow from", "type": "number", "unit": "°C", "default": 100,
+    { "key": "oilWarn", "label": "Engine oil: yellow from", "type": "number", "unit": "°C", "default": 115, "reset": 1,
       "steps": [80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130] },
-    { "key": "oilCrit", "label": "Engine oil: red from", "type": "number", "unit": "°C", "default": 110,
+    { "key": "oilCrit", "label": "Engine oil: red from", "type": "number", "unit": "°C", "default": 120, "reset": 1,
       "steps": [90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 150] },
 
     { "key": "waterCold", "label": "Water: blue below", "type": "number", "unit": "°C", "default": 50,
@@ -74,16 +72,16 @@
 
     { "key": "gearCold", "label": "Gearbox oil: blue below", "type": "number", "unit": "°C", "default": 40,
       "steps": [20, 30, 40, 50, 60, 70] },
-    { "key": "gearWarn", "label": "Gearbox oil: yellow from", "type": "number", "unit": "°C", "default": 100,
+    { "key": "gearWarn", "label": "Gearbox oil: yellow from", "type": "number", "unit": "°C", "default": 110, "reset": 1,
       "steps": [80, 85, 90, 95, 100, 105, 110, 115, 120] },
-    { "key": "gearCrit", "label": "Gearbox oil: red from", "type": "number", "unit": "°C", "default": 115,
+    { "key": "gearCrit", "label": "Gearbox oil: red from", "type": "number", "unit": "°C", "default": 120, "reset": 1,
       "steps": [90, 95, 100, 105, 110, 115, 120, 125, 130, 140] },
 
     { "key": "iatCold", "label": "Intake air: blue below", "type": "number", "unit": "°C", "default": 5,
       "steps": [-20, -10, 0, 5, 10, 15, 20] },
-    { "key": "iatWarn", "label": "Intake air: yellow from", "type": "number", "unit": "°C", "default": 45,
+    { "key": "iatWarn", "label": "Intake air: yellow from", "type": "number", "unit": "°C", "default": 50, "reset": 1,
       "steps": [30, 35, 40, 45, 50, 55, 60, 65, 70] },
-    { "key": "iatCrit", "label": "Intake air: red from", "type": "number", "unit": "°C", "default": 60,
+    { "key": "iatCrit", "label": "Intake air: red from", "type": "number", "unit": "°C", "default": 60, "reset": 1,
       "steps": [40, 45, 50, 55, 60, 65, 70, 75, 80, 90] },
 
     { "key": "tyreCold", "label": "Tyres: blue below", "type": "number", "unit": "°C", "default": 20,
