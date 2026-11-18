@@ -476,9 +476,12 @@ mgu.run({
                 '    ·    boost ' + f(dv.boost, 2) + ' / ' + f(dv.target, 2) + ' bar, intake ' + f(dv.iat, 1) + ' °C, gearbox ' + f(dv.gearbox, 0) +
                 ' °C, knock ' + f(dv.kr, 1) + '°, angles ' + dv.angle.map((a) => f(a, 1)).join(' '), 40, 186, 20,
                 G.isNum(dv.boost) ? GO : t.warn, { font: 'bold' });
+            // each group of values on its own: how long ago it answered, or why it doesn't
+            cv.text('Groups:  ' + ds.groups.map((g) => g.name + ' ' + (g.misses ? g.why + ' x' + g.misses : g.age === null ? '-' : (g.age / 1000).toFixed(1) + ' s')).join('  ·  '),
+                40, 216, 20, ds.groups.some((g) => g.misses) ? t.warn : t.dim, { font: 'bold' });
             // the replies: one row per request (ethanol.js PROBES), under them the last notes
             const cols = [['Request', 40], ['What', 190], ['Reply bytes', 560], ['Value', 1090]];
-            const notes = eth.notes.slice(-3), top = 226, nTop = bottom - notes.length * 24;
+            const notes = eth.notes.concat(ds.notes).sort((a, b) => a[0] - b[0]).slice(-3), top = 256, nTop = bottom - notes.length * 24;
             cols.forEach(([h, x]) => cv.text(h.toUpperCase(), x, top - 8, 15, t.dim, { font: 'bold', spacing: 1.5 }));
             cv.fillRect(32, top, 1544, 1, withAlpha('#ffffff', 0.2));
             const rows = eth.probed || [], rh = Math.min(34, (nTop - top - 8) / Math.max(1, rows.length));

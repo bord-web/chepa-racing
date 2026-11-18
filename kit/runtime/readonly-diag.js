@@ -17,7 +17,8 @@
  *
  * It also paces: one request at a time and at least gapMs between two (25 ms), a 1 s pause after a
  * unit answers busy (NRC 21), and a unit that didn't answer silentAfter requests in a row is skipped
- * until wake(address) (asleep, or not there).
+ * until wake(address) (asleep, or not there). opts.request: limits for every request, as diag.js physical()
+ * takes them (callTimeoutMs, pendingTimeoutMs, maxRetries), for an app that can't have one request hold the rest.
  * stats: requests sent, replies and the time they took (ms / timed), ones without an answer (missed),
  * refused requests (blocked).
  *
@@ -67,6 +68,7 @@ class ReadOnlyDiag {
         this.log = log;
         this.gapMs = (opts && opts.gapMs) || 25;
         this.silentAfter = (opts && opts.silentAfter) || 5;
+        this.limits = opts && opts.request;
         this.misses = {};             // address -> requests in a row without an answer
         this.stats = { sent: 0, replies: 0, missed: 0, silent: 0, blocked: 0, ms: 0, timed: 0 };
         this.chain = Promise.resolve();
@@ -96,7 +98,7 @@ class ReadOnlyDiag {
         return this.queue(async () => {
             this.stats.sent++;
             const t0 = Date.now();
-            const uds = await LINKS.get(this).physical(target, sid, d, timeoutMs || 1500, accept);
+            const uds = await LINKS.get(this).physical(target, sid, d, timeoutMs || 1500, accept, this.limits);
             if (uds) { this.stats.ms += Date.now() - t0; this.stats.timed++; }
             if (!uds) {
                 this.stats.missed++;

@@ -8,6 +8,8 @@
  *   22 55 0D  ->  62 55 0D <x>   PROZENT_ALK_KRST, "Prozent Alkohol im Kraftstoff" (DME8FF_R): x / 2.55 %
  *   01 52     ->  41 52 <x>      OBD-II PID 52 (SAE J1979), the same scale; when the DME refuses 55 0D
  * Only while live() (the car's own data, not the demo). A value older than STALE_MS counts as none.
+ * The link is shared with dme.js: a car without the sensor costs two refusals a minute, and a DME that doesn't
+ * answer this is left alone for QUIET_MS, so the ethanol never holds up the live values.
  *
  * probe(): every candidate once (PROBES: the DME's type, its ethanol and fuel quality identifiers,
  * the OBD ones), raw replies kept for the Developer logs page, to find where this car has the value.
@@ -19,8 +21,11 @@
 const POLL_MS = 2000;
 const STALE_MS = 10000;
 const RETRY_MS = 60000;                  // both identifiers refused: ask again after this
-const WAKE_MS = 30000;                   // the DME stopped answering (asleep, engine off): try it again after this
+const ASK_MS = 1000;
+const QUIET_MS = 15000;                  // no answer: asked again after this
 const NOTES = 8;
+// the link of the live values: no request holds the others for long, and no unit is ever given up on (dme.js paces itself)
+const LINK = { silentAfter: Infinity, request: { callTimeoutMs: 1000, pendingTimeoutMs: 1000, maxRetries: 2 } };
 const DME = 0x12;
 const SOURCES = [
     { name: '22 55 0D', sid: 0x22, data: [0x55, 0x0D], ok: (u) => u[0] === 0x62 && u[1] === 0x55 && u[2] === 0x0D && u.length >= 4, x: (u) => u[3] },
@@ -51,7 +56,7 @@ class Ethanol {
     constructor(ctx, live) {
         this.ctx = ctx; this.log = ctx.log; this.live = live;
         this.v = null; this.t = 0; this.source = null;
-        this.src = 0; this.refusedAt = 0; this.silentAt = 0; this.said = '';
+        this.src = 0; this.refusedAt = 0; this.quietUntil = 0; this.asking = false; this.said = '';
         this.notes = [];
         this.link = null; this.linking = null;
         this.probed = null; this.probedAt = 0; this.probing = false;
@@ -73,28 +78,29 @@ class Ethanol {
         if (this.link) return this.link;
         if (!this.linking) {
             const { ReadOnlyDiag } = require('./kit/readonly-diag');
-            this.linking = new ReadOnlyDiag(this.ctx.signals, this.log).init().then((l) => { this.link = l; return l; });
+            this.linking = new ReadOnlyDiag(this.ctx.signals, this.log, LINK).init().then((l) => { this.link = l; return l; });
         }
         return this.linking;
     }
 
     async tick() {
-        if (!this.live()) return;
+        if (!this.live() || this.asking) return;
         const link = await this._link();
         if (!link.available) return this.note('waiting for the diagnostic link');
         const now = Date.now();
+        if (now < this.quietUntil) return;
         if (this.src >= SOURCES.length) {
             if (now - this.refusedAt < RETRY_MS) return;
             this.src = 0;
         }
-        if (link.silent(DME)) {
-            if (!this.silentAt) this.silentAt = now;
-            if (now - this.silentAt < WAKE_MS) return this.note('the DME does not answer');
-            link.wake(DME); this.silentAt = 0;
-        }
         const s = SOURCES[this.src];
-        const u = await link.physical(DME, s.sid, s.data, 1500, (r) => s.ok(r) || (r[0] === 0x7F && r[1] === s.sid));
-        if (!u) return;
+        let u;
+        this.asking = true; this.quietUntil = now + QUIET_MS;
+        try {
+            u = await link.physical(DME, s.sid, s.data, ASK_MS, (r) => s.ok(r) || (r[0] === 0x7F && r[1] === s.sid));
+        } finally { this.asking = false; }
+        if (!u) return this.note('the DME does not answer');
+        this.quietUntil = 0;
         if (s.ok(u)) {
             this.v = s.x(u) / 2.55; this.t = Date.now(); this.source = s.name;
             return this.note('from the DME, ' + s.name + ' (' + Math.round(this.v) + ' %)');
@@ -117,7 +123,6 @@ class Ethanol {
                 const row = { req, what: p.what, reply: '', value: '' };
                 rows.push(row);
                 if (!link.available) { row.value = 'no diagnostic link'; continue; }
-                link.wake(DME);
                 const u = await link.physical(DME, p.sid, p.data, 1500, (r) => positive(p.sid, p.data, r) || (r[0] === 0x7F && r[1] === p.sid));
                 if (u === undefined) { row.value = 'not sent'; continue; }
                 if (!u) { row.value = 'no answer'; continue; }
@@ -140,4 +145,4 @@ class Ethanol {
     }
 }
 
-module.exports = { Ethanol, PROBES };
+module.exports = { Ethanol, PROBES, LINK };
